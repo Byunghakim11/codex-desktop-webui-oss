@@ -1,0 +1,46 @@
+{
+  "name": "codex-webui",
+  "version": "0.1.0",
+  "description": "Native Windows WebUI coexisting with Codex Desktop on one shared app-server",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Byunghakim11/codex-desktop-webui-oss.git"
+  },
+  "homepage": "https://github.com/Byunghakim11/codex-desktop-webui-oss#readme",
+  "bugs": {
+    "url": "https://github.com/Byunghakim11/codex-desktop-webui-oss/issues"
+  },
+  "keywords": [
+    "openai-codex",
+    "codex",
+    "webui",
+    "self-hosted",
+    "mobile",
+    "local-first",
+    "lan",
+    "remote-access"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "type": "module",
+  "bin": {
+    "codex-webui": "scripts/codex-webui.js"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "setup": "node scripts/setup.js",
+    "token": "node scripts/token-manager.js",
+    "check": "node --check public/app.js && node --check public/access-auth.js && node --check public/approval-policy.js && node --check public/follow-up.js && node --check public/rate-limits.js && node --check public/sidebar-projects.js && node --check public/thread-activity.js && node --check public/thread-settings.js && node --check public/thread-sync.js && node --check server/index.js && node --check server/cloudflare-access.js && node --check server/desktop-broker.js && node --check server/desktop-bridge-client.js && node --check server/desktop-bridge-common.js && node --check server/desktop-bridge-policy.js && node --check server/server-request-policy.js && node --check server/thread-notification-scope.js && node --check server/network-urls.js && node --check server/workspace-browser.js && node --check scripts/codex-webui.js && node --check scripts/token-manager.js && node --check scripts/setup.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "pdfjs-dist": "6.5.438",
+    "dompurify": "^3.4.17",
+    "markdown-it": "^14.3.3",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.3"
+  }
+}
