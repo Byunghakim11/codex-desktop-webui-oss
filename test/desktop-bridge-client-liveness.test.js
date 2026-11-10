@@ -14,6 +14,27 @@ async function waitFor(predicate, { timeout = 1500, interval = 2 } = {}) {
   assert.fail("Timed out waiting for condition");
 }
 
+// Production deadline timers are (correctly) unref'ed so a real bridge never
+// holds the process open. A real socket keeps the event loop alive through its
+// OS handle; the in-memory FakeTransport Duplex below has no such handle, so a
+// test awaiting an unref'ed deadline can be cancelled as "event loop resolved".
+// Hold one bounded, referenced liveness timer per test so those unref'ed
+// production timers can fire. afterEach clears it even when a test fails, so
+// nothing leaks and nothing stays referenced past the test.
+const LIVENESS_HANDLE_MS = 4000;
+let livenessHandle = null;
+
+test.beforeEach(() => {
+  livenessHandle = setTimeout(() => {}, LIVENESS_HANDLE_MS);
+});
+
+test.afterEach(() => {
+  if (livenessHandle !== null) {
+    clearTimeout(livenessHandle);
+    livenessHandle = null;
+  }
+});
+
 class FakeTransport extends Duplex {
   constructor({ throwOnRequest = false } = {}) {
     super();

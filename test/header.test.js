@@ -15,7 +15,12 @@ import {
 } from "../public/ui/header.js";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
-const appSource = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+// Normalize line endings here so source-boundary slices below behave the same
+// on a Windows checkout (CRLF via autocrlf) as on Linux and macOS (LF).
+const appSource = readFileSync(new URL("../public/app.js", import.meta.url), "utf8").replace(
+  /\r\n?/g,
+  "\n"
+);
 const HAN = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 
 function fakeDocument() {
@@ -216,8 +221,14 @@ test("language changes relabel in place and never reload, rebuild messages or cl
   assert.match(appSource, /subscribeLocale\(/);
   assert.match(appSource, /onChange: \(value\) => \{\s*if \(!setLocale\(value\)\)/);
   assert.match(appSource, /function refreshLocalizedChrome\(/);
-  const refresh = appSource.slice(appSource.indexOf("function refreshLocalizedChrome("));
-  const body = refresh.slice(0, refresh.indexOf("\n}\n"));
+  const refreshStart = appSource.indexOf("function refreshLocalizedChrome(");
+  assert.notEqual(refreshStart, -1, "refreshLocalizedChrome must still exist in app.js");
+  const refresh = appSource.slice(refreshStart);
+  // A missing boundary must fail explicitly instead of scanning later functions.
+  const bodyEnd = refresh.indexOf("\n}\n");
+  assert.notEqual(bodyEnd, -1, "could not locate the refreshLocalizedChrome function boundary");
+  const body = refresh.slice(0, bodyEnd);
+  assert.ok(body.length > 0, "refreshLocalizedChrome body must not be empty");
   assert.equal(/renderMessages\(/.test(body), false, "language change must not rebuild the message list");
   assert.equal(/els\.threadTitle\.value\s*=/.test(body), false, "language change must not overwrite the rename text");
   assert.equal(/promptInput\.value\s*=/.test(body), false, "language change must not clear the composer");
