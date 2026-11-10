@@ -17,9 +17,23 @@ if (process.env.FAKE_CODEX_CAPTURE_ARGS === "1" || !args.includes("app-server"))
   const pendingServerIds = new Set();
   const workflowFixture = process.env.FAKE_CODEX_WORKFLOW_FIXTURE === "1";
   const fixtureThread = id => ({ id, name: workflowFixture ? `Workflow ${id === "thread-workflow-b" ? "B" : "A"} — synthetic only` : "Synthetic browser test — no real permissions", preview: "Isolated fixture", cwd: process.env.FAKE_CODEX_PROJECT_DIR || process.cwd(), turns: [], status: { type: "idle" }, createdAt: 1, updatedAt: 1 });
+  const methodCounts = new Map();
+  const savedThreadSettings=new Map();
   const rl = readline.createInterface({ input: process.stdin });
   rl.on("line", (line) => {
     const message = JSON.parse(line);
+    const counted = message.method || "(response)";
+    methodCounts.set(counted, (methodCounts.get(counted) || 0) + 1);
+    if (message.method === "fake/stats") {
+      reply(message.id, { counts: Object.fromEntries(methodCounts), pid:process.pid });
+      return;
+    }
+    if (message.method === "trigger/delayed-echo") {
+      // Synthetic late native response: replies only after the caller-supplied delay.
+      notify("test/delayed-echo-received", { marker: message.params?.marker ?? null });
+      setTimeout(() => reply(message.id, { params: message.params }), Math.min(60000, Math.max(0, Number(message.params?.delayMs) || 0)));
+      return;
+    }
     if (message.method === "initialize") {
       reply(message.id, { server: "fake" });
       return;
@@ -96,6 +110,7 @@ if (process.env.FAKE_CODEX_CAPTURE_ARGS === "1" || !args.includes("app-server"))
       return;
     }
     if (message.method === "thread/settings/update") {
+      savedThreadSettings.set(message.params.threadId,{...savedThreadSettings.get(message.params.threadId),...message.params});
       reply(message.id, {});
       notify("thread/settings/updated", {
         threadId: message.params.threadId,
@@ -182,14 +197,15 @@ if (process.env.FAKE_CODEX_CAPTURE_ARGS === "1" || !args.includes("app-server"))
       return;
     }
     if (message.method === "thread/resume") {
+      const saved=savedThreadSettings.get(message.params.threadId)||{};
       reply(message.id, {
         thread: process.env.FAKE_CODEX_P0_BROWSER === "1" ? fixtureThread(message.params.threadId) : { id: message.params.threadId, cwd: process.cwd(), turns: [] },
-        model: "gpt-test",
-        reasoningEffort: "medium",
-        approvalPolicy: "on-request",
-        approvalsReviewer: "user",
-        activePermissionProfile: { id: ":workspace", extends: null },
-        sandbox: { type: "workspaceWrite" },
+        model: saved.model||"gpt-test",
+        reasoningEffort: saved.effort||"medium",
+        approvalPolicy: saved.approvalPolicy||"on-request",
+        approvalsReviewer: saved.approvalsReviewer||"user",
+        activePermissionProfile: { id: saved.permissions||":workspace", extends: null },
+        sandbox: { type: saved.permissions===":read-only"?"readOnly":saved.permissions===":danger-full-access"?"dangerFullAccess":"workspaceWrite" },
         receivedParams: message.params
       });
       return;

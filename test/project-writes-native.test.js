@@ -1,0 +1,44 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {randomBytes} from 'node:crypto';
+import {ProjectFiles} from '../server/project-files.js';
+import {ProjectWriteContexts} from '../server/project-write-context.js';
+import {ProjectWrites} from '../server/project-writes.js';
+import {runProjectWriter} from '../server/native-project-writer.js';
+
+test('real Windows helper creates without overwrite and edits with BOM/EOL/conflict preservation',{timeout:60000},async t=>{
+ if(process.platform!=='win32')return t.skip('Windows native file mutation helper');
+ const raw=await fs.mkdtemp(path.join(os.tmpdir(),'cw-native-writes-'));
+ const base=await fs.realpath(raw),project=path.join(base,'project'),dataDir=path.join(base,'data');
+ await fs.mkdir(project);await fs.mkdir(dataDir);
+ t.after(async()=>{
+   const temp=await fs.realpath(os.tmpdir());
+   assert.equal(path.dirname(base),temp);assert.ok(path.basename(base).startsWith('cw-native-writes-'));
+   await fs.rm(base,{recursive:true,force:true,maxRetries:5,retryDelay:50});
+ });
+ const scope={id:'synthetic',tokenHash:'synthetic-hash',threadFilterCwds:[project]};
+ const resolveScope=async()=>scope,threadId='synthetic-native-thread';
+ const files=new ProjectFiles({dataDir,readThread:async()=>({id:threadId,cwd:project})});
+ const contexts=new ProjectWriteContexts({files,runWriter:runProjectWriter,dataDir});
+ const writes=new ProjectWrites({contexts,runWriter:runProjectWriter,dataDir});
+ const operationId=()=>randomBytes(16).toString('hex');
+ const root=await writes.issueContext({resolveScope,query:{threadId,parentPath:''}});
+ assert.equal((await writes.mkdir({resolveScope,contextId:root.contextId,path:'docs',operationId:operationId()})).status,'succeeded');
+ const folder=await writes.issueContext({resolveScope,query:{threadId,parentPath:'docs'}});
+ const bytes=Buffer.from('\ufefffirst\r\n','utf8');
+ const upload=()=>writes.upload({resolveScope,contextId:folder.contextId,path:'docs/note.md',operationId:operationId(),stream:(async function*(){yield bytes;})(),declaredSize:bytes.length});
+ assert.equal((await upload()).status,'succeeded');
+ await assert.rejects(upload(),error=>error.status===409);
+ assert.deepEqual(await fs.readFile(path.join(project,'docs/note.md')),bytes);
+ const opened=await writes.editOpen({resolveScope,contextId:folder.contextId,path:'docs/note.md'});
+ assert.equal(opened.result.editable,true);assert.equal(opened.result.bom,true);assert.equal(opened.result.eol,'crlf');
+ const saved=await writes.saveText({resolveScope,contextId:folder.contextId,path:'docs/note.md',operationId:operationId(),text:'changed\n',expectedVersion:opened.result.version});
+ assert.equal(saved.status,'succeeded');assert.notEqual(saved.result.version,opened.result.version);
+ assert.deepEqual(await fs.readFile(path.join(project,'docs/note.md')),Buffer.from('\ufeffchanged\r\n','utf8'));
+ await fs.writeFile(path.join(project,'docs/note.md'),'outside edit\n');
+ await assert.rejects(writes.saveText({resolveScope,contextId:folder.contextId,path:'docs/note.md',operationId:operationId(),text:'must not overwrite\n',expectedVersion:saved.result.version}),error=>error.status===409);
+ assert.equal(await fs.readFile(path.join(project,'docs/note.md'),'utf8'),'outside edit\n');
+});

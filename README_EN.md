@@ -9,12 +9,22 @@ This is an unofficial MIT derivative of [DusuWorks/codex-webui](https://github.c
 ## Features
 
 - Shared conversations, streaming, model settings, supported approval decisions and structured question answers.
-- Collapsible right-side file tree with read-only text, image and PDF preview and downloads.
+- Collapsible right-side file tree with text, image and PDF preview and downloads.
 - Loaded-conversation search, message/code copying, reviewed Markdown exports, bookmarks and an outline.
 - In-tab per-conversation drafts, clear undo, command palette and keyboard help.
 - Text search and line navigation, PDF page/zoom/fit controls, reading presets and numeric diagnostics.
 - Directory-scoped device tokens and optional Cloudflare Tunnel + Access authentication.
 - Optional user-configured companion links, with no preset destinations.
+
+### New in 0.2.0
+
+- Conversation, message and file context menus; conversation favorites, message bookmarks and a per-project new-chat `+`.
+- Folder creation, target-folder uploads and drops, collision preservation, explicit UTF-8 Markdown editing, conflict checks and recovery protection.
+- General document attachments and original downloads, English/한국어 selection, `/` commands and `@` project-file search.
+- Existing-engine Goal, Loop and conversation actions, with supported plan-mode, memory, MCP, skill and plugin controls.
+- Connection heartbeats, bounded reconnect and request deadlines, and isolated late replies. Reconnecting never automatically resends a message, answer or file mutation.
+
+Native availability depends on the installed Codex version and account. Read the [review evidence](docs/implementation/reliability-review.md) and [manual checklist](docs/implementation/release-checklist.md).
 
 ## Install
 

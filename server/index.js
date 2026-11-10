@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, createReadStream, existsSync, fstatSync, mkdirSync, openSync, realpathSync, statSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +24,19 @@ import { pdfAsset, pdfAssetRoot } from "./pdf-assets.js";
 import { nativeRecordedChanges } from "./project-file-discovery.js";
 import { ReadRequestCoalescer } from "./read-request-coalescer.js";
 import { CloudflareAccessAuthenticator, readCloudflareAccessConfig } from "./cloudflare-access.js";
+import { ChatAttachments } from "./chat-attachments.js";
+import { serveChatAttachments } from "./chat-attachments-http.js";
+import { expandChatAttachmentInput } from "./chat-attachment-input.js";
+import { AttachmentSendLedger } from "./chat-attachment-send.js";
+import { acquireFileLease } from "./file-lease.js";
+import { stripAttachmentReferences, attachmentReferences } from "../public/attachment-reference.js";
+import { WEBUI_RELEASE } from "../public/release.js";
+import { createNativeActionsService } from "./native-actions.js";
+import { serveNativeActions } from "./native-actions-http.js";
+import { ProjectWriteContexts } from "./project-write-context.js";
+import { ProjectWrites } from "./project-writes.js";
+import { runProjectWriter } from "./native-project-writer.js";
+import { serveProjectWrites } from "./project-writes-http.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,6 +65,7 @@ const inlineImages = new Map();
 const inlineImageLimit = 80;
 const webuiCapabilities = {
   projectFiles: process.platform === "win32",
+  projectFilesWrite: process.platform === "win32",
   threadSettings: true,
   workspaceBrowser: true
 };
@@ -228,12 +242,14 @@ class DesktopCodexBridge {
   }
 
   broadcast(payload, threadContext = null) {
-    const data = JSON.stringify(payload);
     for (const client of this.clients) {
+      if(threadContext?.thread?.cwd&&hasThreadFilter(client.tokenScope)){
+        client.tokenScope.visibleThreadIds.delete(threadContext.threadId);
+        if(!isPathAllowedInScope(client.tokenScope,threadContext.thread.cwd))continue;
+      }
       if (!canReceiveThreadContext(client.tokenScope, threadContext)) continue;
       if (client.readyState === client.OPEN) {
-        usageTracker.record(client.tokenScope?.id, { bytesOut: Buffer.byteLength(data) });
-        client.send(payload.type === "server-request" ? JSON.stringify({ ...payload, request: this.requestForScope(payload.request, client.tokenScope) }) : data);
+        client.sendJson(payload.type === "server-request" ? { ...payload, request: this.requestForScope(payload.request, client.tokenScope) } : payload);
       }
     }
   }
@@ -261,6 +277,9 @@ function normalizeParams(method, params, scope = defaultTokenScope) {
   if (method === "thread/resume") {
     if (next.cwd === "") delete next.cwd;
     normalizeReasoningEffortParam(next);
+  }
+  if(method==="thread/settings/update"&&hasThreadFilter(scope)&&Object.hasOwn(next,"cwd")&&!isPathAllowedInScope(scope,next.cwd)) {
+    throw new Error("This token can only use the allowed workspace folders.");
   }
 
   if (method === "turn/start") {
@@ -299,10 +318,97 @@ const projectFiles = new ProjectFiles({ dataDir,
   }
 });
 const downloadTickets = new DownloadTickets({resolveScope: hash => {refreshTokenScopesIfChanged();return [...tokenScopes.values()].find(scope=>scope.tokenHash===hash)||null;}});
+const chatAttachments = new ChatAttachments({dataDir,
+  ...(process.platform === "win32" ? {acquireLease:({root,relative,kind})=>acquireFileLease(dataDir,root,relative,kind)} : {})
+});
+const attachmentSendLedger = new AttachmentSendLedger({dataDir});
+const writeContexts=new ProjectWriteContexts({files:projectFiles,runWriter:runProjectWriter,dataDir});
+const projectWrites=new ProjectWrites({contexts:writeContexts,runWriter:runProjectWriter,dataDir});
+const nativeActions = createNativeActionsService({dataDir,callNative:(method,params)=>bridge.requestRaw(method,params),
+  authorizeThread:authorizeNativeThread,codexHome:process.env.CODEX_HOME || path.join(os.homedir(),".codex")});
+
+async function authorizeNativeThread(scope,threadId) {
+  const base=scopeFromToken(scope?.token);
+  if(!base||base.id!==scope?.id||base.tokenHash!==scope?.tokenHash ||
+    (scope.authMode==="cloudflare-access"&&scope.accessExpiresAt<=Math.floor(Date.now()/1000)))throw Object.assign(new Error("Native access expired"),{status:401,code:"UNAUTHORIZED"});
+  const thread=(await bridge.requestRaw("thread/read",{threadId,includeTurns:false}))?.thread;
+  if(thread?.id!==threadId||!thread.cwd)throw Object.assign(new Error("Native thread unavailable"),{status:403,code:"THREAD_FORBIDDEN"});
+  if(hasThreadFilter(base)){
+    const root=await realpath(thread.cwd);
+    const roots=await Promise.all(scopeFilterRoots(base).map(value=>realpath(value).catch(()=>null)));
+    if(!roots.some(value=>value&&canonicalPathInside(value,root)))throw Object.assign(new Error("Native thread unavailable"),{status:403,code:"THREAD_FORBIDDEN"});
+  }
+  return thread;
+}
+
+function attachmentPrincipal(scope) {
+  return createHash("sha256").update(`${scope.tokenHash}\0${scope.authMode === "cloudflare-access" ? scope.accessEmail : "token"}`).digest("hex");
+}
+
+async function attachmentContext(scope, {draftId,cwd,threadId}, {download=false}={}) {
+  if (!scope || (!download && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(draftId||"")) || (download&&!threadId)) {
+    throw Object.assign(new Error("Invalid attachment context"),{status:400,code:"INVALID_CONTEXT"});
+  }
+  if (threadId) {
+    if (typeof threadId !== "string" || threadId.length>200) throw Object.assign(new Error("Invalid thread"),{status:400});
+    const result = await bridge.requestRaw("thread/read",{threadId,includeTurns:false});
+    if (result?.thread?.id !== threadId || !result.thread.cwd) throw Object.assign(new Error("Thread not found"),{status:404});
+    const nativeCwd = await realpath(result.thread.cwd);
+    if (cwd && path.relative(nativeCwd, await realpath(cwd)) !== "") throw Object.assign(new Error("Workspace changed"),{status:409,code:"CONTEXT_CHANGED"});
+    cwd=nativeCwd;
+  }
+  if (typeof cwd !== "string" || !path.isAbsolute(cwd) || !statSync(cwd).isDirectory()) throw Object.assign(new Error("Invalid workspace"),{status:400});
+  cwd=await realpath(cwd);
+  if (hasThreadFilter(scope)) {
+    const roots=await Promise.all(scopeFilterRoots(scope).map(root=>realpath(root).catch(()=>null)));
+    if (!roots.some(root=>root&&canonicalPathInside(root,cwd))) throw Object.assign(new Error("Workspace unavailable"),{status:403,code:"FORBIDDEN"});
+  }
+  return {principalId:attachmentPrincipal(scope),scopeId:createHash("sha256").update(JSON.stringify([scope.id,scope.tokenHash,scopeFilterRoots(scope)])).digest("hex"),cwd,draftId,threadId:threadId||null};
+}
+
+async function resolveAttachmentHttpContext(req,url,{download=false}={}) {
+  const scope=await resolveRequestScope(req,url);
+  if (!scope) throw Object.assign(new Error("Unauthorized"),{status:401,code:"UNAUTHORIZED"});
+  return attachmentContext(scope,{
+    draftId:url.searchParams.get("draftId"),cwd:url.searchParams.get("cwd"),threadId:url.searchParams.get("threadId")
+  },{download});
+}
+
+function freshAttachmentSocketScope(ws) {
+  const previous=ws.tokenScope;
+  const base=scopeFromToken(previous?.token);
+  if(!base || base.id!==previous?.id || base.tokenHash!==previous?.tokenHash || (previous?.authMode==="cloudflare-access" && previous.accessExpiresAt<=Math.floor(Date.now()/1000))) {
+    throw Object.assign(new Error("Attachment access expired"),{code:"UNAUTHORIZED"});
+  }
+  return previous?.authMode==="cloudflare-access" ? createCloudflareAccessScope(base,{email:previous.accessEmail,expiresAt:previous.accessExpiresAt}) : base;
+}
+
+async function requestWithAttachments(ws,method,params) {
+  if(!["turn/start","turn/steer","thread/queue/add"].includes(method) || !Array.isArray(params.attachmentIds) || !params.attachmentIds.length || params.attachmentIds.length>20 || new Set(params.attachmentIds).size!==params.attachmentIds.length) {
+    throw Object.assign(new Error("Invalid attachment send"),{code:"INVALID_ATTACHMENTS"});
+  }
+  const context=await attachmentContext(freshAttachmentSocketScope(ws),{draftId:params.draftId,cwd:params.draftCwd,threadId:params.threadId});
+  const lease=await chatAttachments.acquire(context,params.attachmentIds);
+  try {
+    const freshScope=freshAttachmentSocketScope(ws);
+    const fresh=await attachmentContext(freshScope,{draftId:params.draftId,cwd:params.draftCwd,threadId:params.threadId});
+    if(JSON.stringify(fresh)!==JSON.stringify(context))throw Object.assign(new Error("Attachment context changed"),{code:"CONTEXT_CHANGED"});
+    const nativeParams=expandChatAttachmentInput({method,params,files:lease.files});
+    const result=await attachmentSendLedger.send(context.principalId,{method,...params},async()=>{
+      freshAttachmentSocketScope(ws);
+      try { return await bridge.request(method,nativeParams,freshScope); }
+      finally { await lease.commit(); }
+    });
+    return result;
+  } finally { await lease.release(); }
+}
 
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    if (await serveChatAttachments(req,res,url,{store:chatAttachments,resolveContext:resolveAttachmentHttpContext})) return;
+    if (await serveNativeActions(req,res,url,{service:nativeActions,resolveScope:resolveRequestScope})) return;
+    if (await serveProjectWrites(req,res,url,{writes:projectWrites,resolveScope:resolveRequestScope})) return;
     if (url.pathname.startsWith("/api/project-files/")) {
       const scope = await resolveRequestScope(req, url);
       if (scope) recordHttpUsage(scope, req);
@@ -325,6 +431,7 @@ const server = createServer(async (req, res) => {
       recordHttpUsage(scope, req);
       sendJson(res, {
         authenticated: true,
+        release: WEBUI_RELEASE,
         port: PORT,
         host: HOST,
         bridgeMode,
@@ -521,6 +628,14 @@ const wss = new WebSocketServer({
     zlibInflateOptions: { chunkSize: 16 * 1024 }
   }
 });
+const websocketHeartbeat=setInterval(()=>{
+  for(const client of wss.clients){
+    if(client.readyState!==1)continue;
+    if(client.transportAlive===false){client.terminate();continue;}
+    client.transportAlive=false;client.ping();
+  }
+},30000);
+websocketHeartbeat.unref();wss.on("close",()=>clearInterval(websocketHeartbeat));
 
 server.on("upgrade", (req, socket, head) => {
   void handleWebSocketUpgrade(req, socket, head);
@@ -543,6 +658,13 @@ async function handleWebSocketUpgrade(req, socket, head) {
   wss.handleUpgrade(req, socket, head, (ws) => {
     ws.tokenScope = scope;
     ws.sendJson = (payload) => {
+      if(ws.readyState!==1)return;
+      if(ws.bufferedAmount>8*1048576){ws.close(1013,"Client is not consuming messages; reconnect to sync");return;}
+      const current=scopeFromToken(ws.tokenScope?.token);
+      const expired=ws.tokenScope?.authMode==="cloudflare-access"&&ws.tokenScope.accessExpiresAt<=Math.floor(Date.now()/1000);
+      if(!current||expired||current.id!==ws.tokenScope.id||current.tokenHash!==ws.tokenScope.tokenHash||JSON.stringify(scopeFilterRoots(current))!==JSON.stringify(scopeFilterRoots(ws.tokenScope))){
+        if(ws.readyState===1)ws.close(4001,"Access expired or changed");return;
+      }
       const data = JSON.stringify(payload);
       usageTracker.record(scope.id, { bytesOut: Buffer.byteLength(data) });
       ws.send(data);
@@ -554,6 +676,8 @@ async function handleWebSocketUpgrade(req, socket, head) {
 }
 
 wss.on("connection", (ws) => {
+  ws.transportAlive=true;ws.on("pong",()=>{ws.transportAlive=true;});
+  ws.on("error",error=>{console.warn("[codex-webui:ws]",{event:"client-transport-error",code:/^[A-Z0-9_]{1,64}$/.test(error.code||"")?error.code:"WS_ERROR"});});
   ws.on("message", async (data) => {
     const startedAt = performance.now();
     const bytesIn = Buffer.byteLength(data);
@@ -580,12 +704,21 @@ wss.on("connection", (ws) => {
             expiresAt: previousScope.accessExpiresAt
           })
         : activeScope;
+      if(message.type==="webui-ping"){
+        if(typeof message.nonce!=="string"||!/^[A-Za-z0-9_.-]{1,64}$/.test(message.nonce)){ws.close(4002,"Invalid heartbeat");return;}
+        ws.sendJson({type:"webui-pong",nonce:message.nonce});return;
+      }
       if (message.type === "rpc") {
         const requestParams = bridgeMode === "desktop"
           ? sanitizeDesktopBridgeParams(message.method, message.params || {})
           : message.params || {};
-        await ensureThreadAccess(message.method, requestParams, ws.tokenScope);
-        const rawResult = await bridge.request(message.method, requestParams, ws.tokenScope);
+        const scopedRead=await ensureThreadAccess(message.method, requestParams, ws.tokenScope);
+        const rawResult = Object.hasOwn(requestParams,"attachmentIds")
+          ? await requestWithAttachments(ws,message.method,requestParams)
+          : message.method==="webui/attachment-send/status"
+            ? await attachmentSendLedger.status(attachmentPrincipal(freshAttachmentSocketScope(ws)),requestParams.clientSendId)
+            : message.method==="thread/read"&&requestParams.includeTurns===false&&scopedRead
+              ? scopedRead : await bridge.request(message.method, requestParams, ws.tokenScope);
         rememberVisibleThreadFromResult(message.method, rawResult, ws.tokenScope);
         const result = await compactResultForClient(message.method, rawResult, ws.tokenScope);
         const response = { type: "rpc-result", requestId: message.requestId, result };
@@ -593,6 +726,9 @@ wss.on("connection", (ws) => {
         recordRpcUsage(ws.tokenScope, message, bytesIn, response, false);
         ws.sendJson(response);
       } else if (message.type === "server-response") {
+        const request=bridge.serverRequests.get(interactionKey(message.id));
+        const target=threadContextFromAppServerMessage(request)?.threadId;
+        if(target)await ensureThreadAccess("server-response",{threadId:target},ws.tokenScope);
         if (!bridge.canRespond(message.id, ws.tokenScope)) {
           throw Object.assign(new Error("Request is no longer available to this client."), { code: "REQUEST_RESOLVED" });
         }
@@ -897,7 +1033,8 @@ function scopeFromToken(token) {
 }
 
 async function resolveRequestScope(req, url) {
-  const tokenScope = scopeFromToken(url.searchParams.get("token"));
+  const bearer = /^Bearer ([^\s]+)$/i.exec(String(req.headers.authorization || ""));
+  const tokenScope = scopeFromToken(bearer?.[1] || url.searchParams.get("token"));
   if (tokenScope) return tokenScope;
   let identity = null;
   try {
@@ -1036,12 +1173,12 @@ async function printAndWriteQrCodes(baseUrls) {
 }
 
 async function compactResultForClient(method, result, scope = defaultTokenScope) {
-  if (method === "thread/list") return filterThreadListResult(result, scope);
+  if (method === "thread/list") return stripInlineDataImages(filterThreadListResult(result, scope));
   if (method === "thread/read" || method === "thread/start" || method === "thread/resume") {
     return stripInlineDataImages(result);
   }
   if (method === "thread/turns/list") return stripInlineDataImages(result);
-  return result;
+  return stripInlineDataImages(result);
 }
 
 
@@ -1074,13 +1211,11 @@ async function ensureThreadAccess(method, params, scope = defaultTokenScope) {
   if (!hasThreadFilter(scope) || method === "thread/list" || method === "thread/start") return;
   const threadId = threadIdFromParams(params);
   if (!threadId) return;
-  if (scope.visibleThreadIds.has(threadId)) return;
-
-  const result = await bridge.request("thread/read", { threadId }, scope);
+  const result = await bridge.requestRaw("thread/read", { threadId,includeTurns:false });
   const thread = result?.thread || result;
   if (thread?.id && isThreadInFilter(thread, scope)) {
     scope.visibleThreadIds.add(thread.id);
-    return;
+    return result;
   }
   throw new Error("This token can only access sessions in the allowed folder.");
 }
@@ -1091,7 +1226,7 @@ function threadIdFromParams(params) {
 
 function threadContextFromAppServerMessage(message) {
   const params = message?.params || {};
-  const thread = params.thread || null;
+  const thread = params.thread || (params.threadSettings?.cwd ? {cwd:params.threadSettings.cwd} : params.cwd ? {cwd:params.cwd} : null);
   const threadId = params.threadId || params.thread_id || params.conversationId || thread?.id || "";
   return threadId ? { threadId, thread } : null;
 }
@@ -1113,8 +1248,12 @@ function scopeFilterRoots(scope) {
 }
 
 function isPathAllowedInScope(scope, value) {
-  const target = normalizeLocalPath(value || "");
-  return Boolean(target && scopeFilterRoots(scope).some((root) => isPathInside(root, target)));
+  if(typeof value!=="string"||!value||value.startsWith("\\\\"))return false;
+  try{
+    const target=realpathSync(normalizeLocalPath(value));
+    if(target.startsWith("\\\\"))return false;
+    return scopeFilterRoots(scope).some(root=>{try{return canonicalPathInside(realpathSync(root),target);}catch{return false;}});
+  }catch{return false;}
 }
 
 function normalizeReasoningEffortParam(params) {
@@ -1127,6 +1266,7 @@ function normalizeReasoningEffortParam(params) {
 }
 
 function stripInlineDataImages(value) {
+  if (typeof value === "string") return stripAttachmentReferences(value);
   if (!value || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map(stripInlineDataImages);
 
@@ -1154,6 +1294,10 @@ function stripInlineDataImages(value) {
     } else {
       next[key] = stripInlineDataImages(entry);
     }
+  }
+  if (typeof value.text === "string") {
+    const files = attachmentReferences(value.text);
+    if (files.length) next.webuiAttachments = files;
   }
   return next;
 }
@@ -1257,6 +1401,11 @@ function normalizeLocalPath(value) {
 function isPathInside(parent, child) {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function canonicalPathInside(parent,child){
+  const key=value=>String(value).replace(/^[a-z]:/i,drive=>drive.toUpperCase()).replace(/[\\/]+$/,"");
+  const base=key(parent),target=key(child);return target===base||target.startsWith(base+path.sep);
 }
 
 function readRequestBody(req, limitBytes) {

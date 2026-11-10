@@ -11,7 +11,7 @@ function appCache(){
   let builds=0;
   const node=()=>({append:noop});
   const context=vm.createContext({state,workflowRevision:0,workflowDraftSerial:0,t:key=>key,
-    els:{messages},document:{activeElement:null,createElement:node},groupTimeline:items=>items.map(message=>({type:"message",message})),
+    els:{messages},attachmentDownloadViews:new Set(),document:{activeElement:null,createElement:node},groupTimeline:items=>items.map(message=>({type:"message",message})),
     renderMessage:()=>{seen.push(context.workflowSnapshot());return node();},renderHistoryLoader:()=>null,renderReplyProgressFooter:()=>null,renderLastMessageTime:()=>null,
     updateTrafficSummary:noop,scrollMessagesToBottom:noop,renderMarkdown:x=>x,bindImagePlaceholders:noop,bindMarkdownImages:noop,
     conversationTools:{update(){context.workflowSnapshot();},decorateMessage(){seen.push(context.workflowSnapshot());}},

@@ -52,7 +52,7 @@ test("Desktop-only server browses and creates scoped workspaces without spawning
       throw new Error(`${error.message}\nstdout=${stdout}\nstderr=${stderr}`);
     });
   assert.equal(info.bridgeMode, "desktop", stderr);
-  assert.deepEqual(info.capabilities, { projectFiles: process.platform === "win32", threadSettings: true, workspaceBrowser: true });
+  assert.deepEqual(info.capabilities, { projectFiles: process.platform === "win32", projectFilesWrite: process.platform === "win32", threadSettings: true, workspaceBrowser: true });
 
   const roots = await fetch(`${base}/api/workspaces?token=${encodeURIComponent(token)}`).then((res) => res.json());
   assert.deepEqual(roots.roots.map((entry) => entry.path), [allowedRoot]);

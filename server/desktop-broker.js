@@ -11,6 +11,11 @@ import { desktopBridgePipePath, ensureDesktopBridgeSecret } from "./desktop-brid
 import { interactionKey } from "../public/interaction-contracts.js";
 import { InteractionRegistry } from "./interaction-registry.js";
 
+const PIPE_SOFT_BUFFER_BYTES=8*1048576;
+const PIPE_HARD_BUFFER_BYTES=64*1048576;
+const PIPE_DRAIN_TIMEOUT_MS=10000;
+const pipePressure=new WeakMap();
+
 const brokerDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(brokerDir, "..");
 const desktopArgs = process.argv.slice(2);
@@ -51,6 +56,12 @@ async function runBroker() {
   let markPipeReady;
   const pipeReady = new Promise((resolve) => markPipeReady = resolve);
   let nextInternalId = 1;
+  const routeTtlMs = webUiRouteTtlMs();
+  const webUiPendingLimit = 256;
+  const childBufferLimitBytes = 1024 * 1024;
+  let childStdinFailed = false;
+  let childStdinBlocked = false;
+  let desktopPausedForDrain=false;
 
   const server = net.createServer((socket) => {
     socket.setNoDelay(true);
@@ -72,29 +83,74 @@ async function runBroker() {
         }
         socket.authenticated = true;
         clients.add(socket);
-        sendSocket(socket, { type: "hello", ok: true, hostRuntime: "windows", epoch, pendingServerRequests: interactions.snapshot() });
+        sendSocket(socket, { type: "hello", ok: true, hostRuntime: "windows", epoch, features:{abandon:true}, pendingServerRequests: interactions.snapshot() });
         return;
       }
-      handleClientMessage(socket, message);
+      try {
+        handleClientMessage(socket, message);
+      } catch (error) {
+        sendSocket(socket, { type: "bridge-error", error: "Bridge could not process the request" });
+        process.stderr.write(`[codex-webui-bridge] Client message failed (${error?.code || "unknown"}).\n`);
+      }
+    });
+    rl.on("error", (error) => {
+      process.stderr.write(`[codex-webui-bridge] Client stream error (${error?.code || "unknown"}).\n`);
+    });
+    socket.on("error", (error) => {
+      process.stderr.write(`[codex-webui-bridge] Client socket error (${error?.code || "unknown"}).\n`);
     });
     socket.on("close", () => {
       clients.delete(socket);
-      for (const [id, route] of pending) {
-        if (route.socket === socket) pending.delete(id);
+      for (const [id, route] of [...pending]) {
+        if (route.socket === socket) dropRoute(id);
       }
     });
   });
 
   function handleClientMessage(socket, message) {
     if (message.type === "request") {
+      if (!message.method) {
+        sendSocket(socket, { type: "bridge-error", error: "Request method is required" });
+        return;
+      }
+      if (webUiRouteCount() >= webUiPendingLimit) {
+        sendRouteError(socket, message.requestId, "BRIDGE_OVERLOADED", "Desktop bridge is at its pending request limit");
+        return;
+      }
+      if (childCongested(socket)) {
+        sendRouteError(socket, message.requestId, "BRIDGE_BACKPRESSURE", "Desktop bridge is congested");
+        return;
+      }
       const id = nextInternalId++;
-      pending.set(id, {
+      const route = {
         destination: "webui",
         socket,
         originalId: message.requestId,
-        method: message.method
-      });
-      sendChild({ id, method: message.method, params: message.params || {} });
+        method: message.method,
+        timer: null
+      };
+      pending.set(id, route);
+      route.timer = setTimeout(() => expireWebUiRoute(id), routeTtlMs);
+      route.timer.unref?.();
+      try {
+        sendChild({ id, method: message.method, params: message.params || {} });
+      } catch {
+        dropRoute(id);
+        sendRouteError(socket, message.requestId, "BRIDGE_UNAVAILABLE", "Desktop engine is unavailable");
+      }
+      return;
+    }
+    if (message.type === "abandon") {
+      // Best-effort reply-route removal only: the engine operation is never cancelled or retried.
+      if (message.requestId === undefined) return;
+      let droppedRoute = false;
+      for (const [id, route] of [...pending]) {
+        if (route.destination === "webui" && route.socket === socket && route.originalId === message.requestId) {
+          dropRoute(id);
+          droppedRoute = true;
+        }
+      }
+      if (droppedRoute) sendSocket(socket, { type: "abandon-ack", requestId: message.requestId });
       return;
     }
     if (message.type === "server-response") {
@@ -108,7 +164,7 @@ async function runBroker() {
         });
         return;
       }
-      if (!child.stdin.writable) {
+      if (childStdinFailed || !child.stdin.writable) {
         sendSocket(socket, { type: "response", requestId: message.requestId, error: { message: "Desktop engine is unavailable", code: "BRIDGE_UNAVAILABLE" } });
         return;
       }
@@ -143,9 +199,15 @@ async function runBroker() {
       pending.set(id, {
         destination: "desktop",
         originalId: message.id,
-        method: message.method
+        method: message.method,
+        timer: null
       });
-      sendChild({ ...message, id });
+      try {
+        sendChild({ ...message, id });
+      } catch {
+        pending.delete(id);
+        writeDesktop({ id: message.id, error: { message: "Desktop engine is unavailable", code: "BRIDGE_UNAVAILABLE" } });
+      }
       return;
     }
     if (message?.id !== undefined && !message?.method) {
@@ -160,11 +222,17 @@ async function runBroker() {
   }
 
   function handleChildMessage(message) {
-    if (message?.id !== undefined && !message?.method && pending.has(message.id)) {
+    if (message?.id !== undefined && !message?.method) {
+      // Every id-without-method line is a terminal response to exactly one routed request.
+      // Unmatched (late, abandoned, or expired) responses are dropped here and never
+      // forwarded to Desktop or broadcast, so they cannot leak across channels.
       const route = pending.get(message.id);
-      pending.delete(message.id);
-      const restored = { ...message, id: route.originalId };
-      if (route.destination === "desktop") writeDesktop(restored);
+      if (!route) {
+        process.stderr.write("[codex-webui-bridge] Dropped engine response for an unknown or expired route.\n");
+        return;
+      }
+      dropRoute(message.id);
+      if (route.destination === "desktop") writeDesktop({ ...message, id: route.originalId });
       else sendSocket(route.socket, {
         type: "response",
         requestId: route.originalId,
@@ -188,12 +256,48 @@ async function runBroker() {
   }
 
   function sendChild(message) {
-    if (!child.stdin.writable) throw new Error("Real Codex app-server is not writable");
-    child.stdin.write(`${JSON.stringify(message)}\n`);
+    if (childStdinFailed || !child.stdin.writable) throw new Error("Real Codex app-server is not writable");
+    const accepted = child.stdin.write(`${JSON.stringify(message)}\n`);
+    if (!accepted) {childStdinBlocked=true;if(!desktopPausedForDrain){desktopPausedForDrain=true;desktopInput.pause();}}
+    return accepted;
+  }
+
+  function childCongested(socket) {
+    const buffered = (child.stdin.writableLength || 0) + (socket?.writableLength || 0);
+    // Desktop traffic is never throttled or dropped; only new WebUI requests are denied once the
+    // bounded engine/client buffers are full. While write() has returned false we keep half the
+    // budget free for drained writes so the buffer cannot grow without bound before "drain".
+    return buffered >= (childStdinBlocked ? childBufferLimitBytes / 2 : childBufferLimitBytes);
+  }
+
+  function webUiRouteCount() {
+    let count = 0;
+    for (const route of pending.values()) if (route.destination === "webui") count += 1;
+    return count;
+  }
+
+  function dropRoute(id) {
+    const route = pending.get(id);
+    if (!route) return null;
+    pending.delete(id);
+    if (route.timer) clearTimeout(route.timer);
+    return route;
+  }
+
+  function expireWebUiRoute(id) {
+    const route = pending.get(id);
+    if (!route || route.destination !== "webui") return;
+    dropRoute(id);
+    // Expiry forgets only the reply route; the engine operation is never cancelled or retried.
+    sendRouteError(route.socket, route.originalId, "BRIDGE_ROUTE_EXPIRED", "Desktop bridge stopped waiting for this response");
+  }
+
+  function sendRouteError(socket, requestId, code, message) {
+    sendSocket(socket, { type: "response", requestId, error: { message, code } });
   }
 
   function writeDesktop(message) {
-    process.stdout.write(`${JSON.stringify(message)}\n`);
+    if(!process.stdout.write(`${JSON.stringify(message)}\n`))child.stdout.pause();
   }
 
   function broadcast(message) {
@@ -211,19 +315,45 @@ async function runBroker() {
   }
 
   const desktopInput = bomStrippedStdin();
-  readline.createInterface({ input: desktopInput }).on("line", (line) => {
+  const desktopLines = readline.createInterface({ input: desktopInput });
+  desktopLines.on("line", (line) => {
     try {
       handleDesktopMessage(JSON.parse(line));
-    } catch (error) {
-      process.stderr.write(`[codex-webui-bridge] Invalid Desktop message: ${error.message}\n`);
+    } catch {
+      process.stderr.write("[codex-webui-bridge] Could not process a Desktop message.\n");
     }
   });
-  readline.createInterface({ input: child.stdout }).on("line", (line) => {
+  desktopLines.on("error", (error) => {
+    process.stderr.write(`[codex-webui-bridge] Desktop input stream error (${error?.code || "unknown"}).\n`);
+  });
+  const childLines = readline.createInterface({ input: child.stdout });
+  childLines.on("line", (line) => {
+    let message;
     try {
-      handleChildMessage(JSON.parse(line));
+      message=JSON.parse(line);
     } catch {
-      process.stdout.write(`${line}\n`);
+      if(!process.stdout.write(`${line}\n`))child.stdout.pause();
+      return;
     }
+    try{handleChildMessage(message);}catch{process.stderr.write("[codex-webui-bridge] Could not deliver an engine message.\n");}
+  });
+  childLines.on("error", (error) => {
+    process.stderr.write(`[codex-webui-bridge] Engine output stream error (${error?.code || "unknown"}).\n`);
+  });
+  child.stdout.on("error", (error) => {
+    process.stderr.write(`[codex-webui-bridge] Engine stdout error (${error?.code || "unknown"}).\n`);
+  });
+  child.stdin.on("error", (error) => {
+    childStdinFailed = true;
+    process.stderr.write(`[codex-webui-bridge] Real Codex stdin error (${error?.code || "unknown"}); new WebUI requests will be denied.\n`);
+  });
+  child.stdin.on("drain", () => {
+    childStdinBlocked = false;
+    if(desktopPausedForDrain){desktopPausedForDrain=false;desktopInput.resume();}
+  });
+  process.stdout.on("drain",()=>child.stdout.resume());
+  process.stdout.on("error", (error) => {
+    process.stderr.write(`[codex-webui-bridge] Desktop output stream error (${error?.code || "unknown"}).\n`);
   });
   child.stderr.pipe(process.stderr);
 
@@ -407,6 +537,14 @@ function bomStrippedStdin() {
   return transform;
 }
 
+function webUiRouteTtlMs() {
+  // Production routing TTL is three minutes (>= 120s). Tests may shorten it explicitly.
+  const override = process.env.CODEX_DESKTOP_BRIDGE_TESTING === "1"
+    ? Number(process.env.CODEX_DESKTOP_BRIDGE_TEST_ROUTE_TTL_MS)
+    : NaN;
+  return Number.isFinite(override) && override > 0 ? override : 180000;
+}
+
 function sameSecret(value, expected) {
   const left = Buffer.from(String(value || ""));
   const right = Buffer.from(expected);
@@ -414,7 +552,21 @@ function sameSecret(value, expected) {
 }
 
 function sendSocket(socket, message) {
-  if (socket?.writable) socket.write(`${JSON.stringify(message)}\n`);
+  if (!socket?.writable)return false;
+  const line=`${JSON.stringify(message)}\n`;
+  if((socket.writableLength||0)+Buffer.byteLength(line)>PIPE_HARD_BUFFER_BYTES){socket.destroy();return false;}
+  try{
+    const accepted=socket.write(line);
+    if(!accepted&&(socket.writableLength||0)>PIPE_SOFT_BUFFER_BYTES)watchSocketDrain(socket);
+    return accepted;
+  }catch{socket.destroy();return false;}
+}
+
+function watchSocketDrain(socket){
+  if(pipePressure.has(socket))return;
+  const cleanup=()=>{const record=pipePressure.get(socket);if(!record)return;clearTimeout(record.timer);socket.off("drain",cleanup);socket.off("close",cleanup);pipePressure.delete(socket);};
+  const timer=setTimeout(()=>{const stalled=(socket.writableLength||0)>PIPE_SOFT_BUFFER_BYTES;cleanup();if(stalled)socket.destroy();},PIPE_DRAIN_TIMEOUT_MS);
+  timer.unref?.();pipePressure.set(socket,{timer});socket.once("drain",cleanup);socket.once("close",cleanup);
 }
 
 function signalExitCode(signal) {

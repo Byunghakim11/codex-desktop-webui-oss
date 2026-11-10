@@ -16,9 +16,9 @@ export async function searchProjectFiles(files,scope,query,signal) {
   if(files.discovering>=2)throw fileError(429,"FILES_BUSY");files.discovering++;
   const check=()=>{if(signal?.aborted)throw fileError(499,"SEARCH_CANCELLED");};
   try{
-    check();const context=await files.context(scope,query),queue=[{path:"",depth:0}],entries=[];let scanned=0,visited=0,truncated=false;
+    check();const context=await files.context(scope,query,signal),queue=[{path:"",depth:0}],entries=[];let scanned=0,visited=0,truncated=false;
     while(queue.length&&visited<32&&scanned<5000&&entries.length<100){
-      check();const directory=queue.shift(),opened=await files.open(scope,{...query,path:directory.path},"directory");visited++;
+      check();const directory=queue.shift(),opened=await files.open(scope,{...query,path:directory.path},"directory",signal);visited++;
       try{
         const dir=await fs.opendir(opened.target);
         for await(const entry of dir){
@@ -35,16 +35,18 @@ export async function searchProjectFiles(files,scope,query,signal) {
         if(!opened.lease.alive)throw fileError(409,"PROJECT_CHANGED");
       }finally{await opened.close();}
     }
-    check();await files.context(scope,query);
+    check();await files.context(scope,query,signal);
     return {context:files.publicContext(context),entries,visited,scanned,truncated:truncated||queue.length>0};
   }finally{files.discovering--;}
 }
 
-export async function recordedArtifacts(files,scope,query) {
-  if(!query.rootRevision)throw fileError(400,"REVISION_REQUIRED");const context=await files.context(scope,query);
-  const changes=await files.readChanges(query.threadId),entries=[],seen=new Set();
+export async function recordedArtifacts(files,scope,query,signal) {
+  const check=()=>{if(signal?.aborted)throw fileError(499,"ARTIFACTS_CANCELLED");};check();
+  if(!query.rootRevision)throw fileError(400,"REVISION_REQUIRED");const context=await files.context(scope,query,signal);
+  check();const changes=await files.readChanges(query.threadId),entries=[],seen=new Set();check();
   const root=context.root.replace(/^[a-z]:/i,drive=>drive.toUpperCase());
   for(const change of changes.slice(0,1000)){
+    check();
     if(typeof change?.path!=="string"||change.path.length>4096||!["add","update","delete"].includes(change.kind))continue;let relative=change.path;
     if(path.isAbsolute(relative)){const target=path.normalize(relative).replace(/^[a-z]:/i,drive=>drive.toUpperCase());if(!target.startsWith(root+path.sep))continue;relative=target.slice(root.length+1);}
     relative=relative.replace(/\\/g,"/");try{safeRelativePath(relative);}catch{continue;}
@@ -52,5 +54,5 @@ export async function recordedArtifacts(files,scope,query) {
     if(change.kind==="delete")continue;
     entries.push({path:relative,name:path.posix.basename(relative),label:relative,kind:"file",turnId:typeof change.turnId==="string"?change.turnId.slice(0,256):"",source:"native-fileChange"});if(entries.length>=100)break;
   }
-  await files.context(scope,query);return {context:files.publicContext(context),entries,source:"native-fileChange",turnLimit:20,truncated:entries.length===100||changes.length>=1000};
+  check();await files.context(scope,query,signal);return {context:files.publicContext(context),entries,source:"native-fileChange",turnLimit:20,truncated:entries.length===100||changes.length>=1000};
 }

@@ -1,6 +1,6 @@
 {
   "name": "codex-webui",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Native Windows WebUI coexisting with Codex Desktop on one shared app-server",
   "private": true,
   "license": "MIT",

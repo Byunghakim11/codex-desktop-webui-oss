@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import test, { before, after } from "node:test";
+import vm from "node:vm";
 import { installTestBridge } from "../test-support/install-test-bridge.js";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
@@ -360,13 +361,13 @@ test("WebUI desktop mode uses the selected thread through the shared broker", { 
   webui.stderr.on("data", (chunk) => webuiError += chunk.toString("utf8"));
   const info = await waitForHttp(`http://127.0.0.1:${port}/api/info?token=${encodeURIComponent(token)}`);
   assert.equal(info.bridgeMode, "desktop");
-  assert.deepEqual(info.capabilities, { projectFiles: process.platform === "win32", threadSettings: true, workspaceBrowser: true });
+  assert.deepEqual(info.capabilities, { projectFiles: process.platform === "win32", projectFilesWrite: process.platform === "win32", threadSettings: true, workspaceBrowser: true });
 
   socket = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${encodeURIComponent(token)}`);
   const browser = webSocketQueue(socket);
   const hello = await browser.next((message) => message.type === "hello");
   assert.equal(hello.bridgeMode, "desktop");
-  assert.deepEqual(hello.capabilities, { projectFiles: process.platform === "win32", threadSettings: true, workspaceBrowser: true });
+  assert.deepEqual(hello.capabilities, { projectFiles: process.platform === "win32", projectFilesWrite: process.platform === "win32", threadSettings: true, workspaceBrowser: true });
   if (!hello.desktopBridgeConnected) {
     const online = await browser.next(
       (message) => message.type === "desktop-bridge-status" && message.connected === true
@@ -618,6 +619,25 @@ function lineQueue(stream) {
         const timer = setTimeout(() => reject(new Error("Timed out waiting for line")), 5000);
         waiters.push({ predicate, resolve: (message) => { clearTimeout(timer); resolve(message); } });
       });
+    },
+    none(predicate, milliseconds = 300) {
+      const existing = messages.find(predicate);
+      if (existing) return Promise.reject(new Error(`Unexpected line ${JSON.stringify(existing)}`));
+      return new Promise((resolve, reject) => {
+        const waiter = {
+          predicate,
+          resolve: (message) => {
+            clearTimeout(timer);
+            reject(new Error(`Unexpected line ${JSON.stringify(message)}`));
+          }
+        };
+        const timer = setTimeout(() => {
+          const index = waiters.indexOf(waiter);
+          if (index >= 0) waiters.splice(index, 1);
+          resolve();
+        }, milliseconds);
+        waiters.push(waiter);
+      });
     }
   };
 }
@@ -632,7 +652,7 @@ async function connectLines(endpoint) {
         candidate.once("error", reject);
       });
       const queue = lineQueue(socket);
-      return { socket, next: queue.next, send: (message) => socket.write(`${JSON.stringify(message)}\n`) };
+      return { socket, next: queue.next, none: queue.none, send: (message) => socket.write(`${JSON.stringify(message)}\n`) };
     } catch (error) {
       lastError = error;
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -739,6 +759,173 @@ function webSocketQueue(socket) {
         );
         waiters.push({ predicate, resolve: (message) => { clearTimeout(timer); resolve(message); } });
       });
+    },
+    none(predicate, milliseconds = 300) {
+      const existing = messages.find(predicate);
+      if (existing) return Promise.reject(new Error(`Unexpected WebSocket message ${JSON.stringify(existing)}`));
+      return new Promise((resolve, reject) => {
+        const waiter = {
+          predicate,
+          resolve: (message) => {
+            clearTimeout(timer);
+            reject(new Error(`Unexpected WebSocket message ${JSON.stringify(message)}`));
+          }
+        };
+        const timer = setTimeout(() => {
+          const index = waiters.indexOf(waiter);
+          if (index >= 0) waiters.splice(index, 1);
+          resolve();
+        }, milliseconds);
+        waiters.push(waiter);
+      });
     }
   };
 }
+
+async function startFakeBroker(t, extraEnv = {}) {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "codex-webui-bridge-reliability-"));
+  const pipe = process.platform === "win32"
+    ? `\\\\.\\pipe\\codex-webui-reliability-${process.pid}-${randomBytes(6).toString("hex")}`
+    : path.join(dataDir, "bridge.sock");
+  const broker = spawn(process.execPath, [brokerPath, "app-server", "--analytics-default-enabled"], {
+    cwd: rootDir,
+    env: {
+      ...process.env,
+      CODEX_WEBUI_DATA_DIR: dataDir,
+      CODEX_WEBUI_DESKTOP_LIFECYCLE: "0",
+      CODEX_DESKTOP_BRIDGE_PIPE: pipe,
+      CODEX_DESKTOP_BRIDGE_CODEX_PATH: process.execPath,
+      CODEX_DESKTOP_BRIDGE_CODEX_ARGS_JSON: JSON.stringify([fakeCodexPath]),
+      ...extraEnv
+    },
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  const closed = new Promise(resolve => broker.once("close", resolve));
+  let stderr = "";
+  broker.stderr.on("data", chunk => { stderr += chunk.toString("utf8"); });
+  const desktop = lineQueue(broker.stdout);
+  t.after(async () => {
+    if (broker.exitCode === null && broker.signalCode === null) broker.kill();
+    await closed;
+    await removeWithRetry(dataDir);
+  });
+  broker.stdin.write(`${JSON.stringify({ id: 1, method: "initialize", params: {} })}\n`);
+  await desktop.next(message => message.id === 1);
+  const secret = (await waitForRead(path.join(dataDir, "desktop-bridge", "secret"))).trim();
+  const connect = async () => {
+    const client = await connectLines(pipe);
+    client.send({ type: "hello", token: secret });
+    assert.equal((await client.next(message => message.type === "hello")).ok, true);
+    return client;
+  };
+  return { broker, desktop, connect, stderrText: () => stderr };
+}
+
+function isLateNativeResponse(message, marker) {
+  return message?.method === undefined
+    && (message?.params?.marker === marker || message?.result?.params?.marker === marker);
+}
+
+test("late WebUI response after pipe close is dropped, never sent to Desktop", { timeout: 20000 }, async (t) => {
+  const harness = await startFakeBroker(t);
+  const web = await harness.connect();
+  const observer = await harness.connect();
+
+  web.send({ type: "request", requestId: 21, method: "trigger/delayed-echo", params: { delayMs: 400, marker: "late-webui" } });
+  await harness.desktop.next(message => message.method === "test/delayed-echo-received" && message.params?.marker === "late-webui");
+  harness.broker.stdin.write(`${JSON.stringify({ id: 55, method: "echo", params: { source: "desktop-parallel" } })}\n`);
+  web.socket.destroy();
+
+  const desktopEcho = await harness.desktop.next(message => message.id === 55);
+  assert.equal(desktopEcho.result.params.source, "desktop-parallel");
+  await Promise.all([
+    harness.desktop.none(message => isLateNativeResponse(message, "late-webui"), 800),
+    observer.none(message => message.type === "appserver" && isLateNativeResponse(message.message, "late-webui"), 800)
+  ]);
+  assert.match(harness.stderrText(), /unknown or expired route/);
+});
+
+test("WebUI send failure answers BRIDGE_UNAVAILABLE without restarting the broker", { timeout: 20000 }, async (t) => {
+  const source=await readFile(new URL('../server/desktop-broker.js',import.meta.url),'utf8');
+  const actual=name=>{const start=source.indexOf(`function ${name}(`);assert.ok(start>=0);const end=source.indexOf('\n  }',start)+4;assert.ok(end>start);return source.slice(start,end);};
+  const replies=[],writes=[],timers=new Set();let serial=0;
+  const context=vm.createContext({child:{stdin:{writable:false,writableLength:0,write:line=>{writes.push(line);return true;}}},childStdinFailed:false,childStdinBlocked:false,childBufferLimitBytes:1048576,webUiPendingLimit:256,routeTtlMs:180000,nextInternalId:1,pending:new Map(),sendSocket:(_socket,message)=>replies.push(message),setTimeout:()=>{const timer={id:++serial,unref(){}};timers.add(timer);return timer;},clearTimeout:timer=>timers.delete(timer),expireWebUiRoute:()=>{}});
+  vm.runInContext(['handleClientMessage','sendChild','childCongested','webUiRouteCount','dropRoute','sendRouteError'].map(actual).join('\n'),context);
+  const socket={writableLength:0};
+  assert.doesNotThrow(()=>context.handleClientMessage(socket,{type:'request',requestId:30,method:'echo'}));
+  assert.equal(replies.at(-1).error.code,'BRIDGE_UNAVAILABLE');assert.equal(context.pending.size,0);assert.equal(timers.size,0);assert.equal(writes.length,0);
+  context.child.stdin.writable=true;context.child.stdin.write=()=>{throw Error('synthetic synchronous transport failure');};
+  assert.doesNotThrow(()=>context.handleClientMessage(socket,{type:'request',requestId:31,method:'echo'}));assert.equal(replies.at(-1).requestId,31);assert.equal(context.pending.size,0);assert.equal(timers.size,0);
+  context.child.stdin.write=line=>{writes.push(line);return true;};
+  context.handleClientMessage(socket,{type:'request',requestId:32,method:'echo'});assert.equal(writes.length,1);assert.equal(context.pending.size,1,'healthy messages can still be routed after a localized failure');
+});
+
+test("abandon drops only the reply route and ignores the late native response", { timeout: 20000 }, async (t) => {
+  const harness = await startFakeBroker(t);
+  const webA = await harness.connect();
+  const webB = await harness.connect();
+
+  webA.send({ type: "request", requestId: 41, method: "trigger/delayed-echo", params: { delayMs: 300, marker: "abandoned-one" } });
+  await harness.desktop.next(message => message.method === "test/delayed-echo-received" && message.params?.marker === "abandoned-one");
+  webA.send({ type: "abandon", requestId: 41 });
+  await webA.next(message => message.type === "abandon-ack" && message.requestId === 41);
+
+  webA.send({ type: "request", requestId: 42, method: "trigger/delayed-echo", params: { delayMs: 300, marker: "owned-by-a" } });
+  await harness.desktop.next(message => message.method === "test/delayed-echo-received" && message.params?.marker === "owned-by-a");
+  webB.send({ type: "abandon", requestId: 42 });
+  const owned = await webA.next(message => message.type === "response" && message.requestId === 42);
+  assert.equal(owned.result.params.marker, "owned-by-a");
+
+  webB.send({ type: "request", requestId: 43, method: "echo", params: { marker: "parallel-healthy" } });
+  assert.equal((await webB.next(message => message.type === "response" && message.requestId === 43)).result.params.marker, "parallel-healthy");
+  webB.send({ type: "request", requestId: 44, method: "fake/stats", params: {} });
+  const stats = await webB.next(message => message.type === "response" && message.requestId === 44);
+  assert.equal(stats.result.counts["trigger/delayed-echo"], 2);
+
+  await Promise.all([
+    harness.desktop.none(message => isLateNativeResponse(message, "abandoned-one"), 500),
+    webA.none(message => message.type === "response" && message.requestId === 41, 100)
+  ]);
+});
+
+test("WebUI pending routes are capped and route expiry never redispatches", { timeout: 30000 }, async (t) => {
+  const CAP = 256;
+  const capHarness = await startFakeBroker(t);
+  const capped = await capHarness.connect();
+  const firstIds = [];
+  for (let index = 0; index < CAP; index += 1) {
+    const requestId = 1000 + index;
+    firstIds.push(requestId);
+    capped.send({ type: "request", requestId, method: "trigger/delayed-echo", params: { delayMs: 60000, marker: `cap-${index}` } });
+  }
+  capped.send({ type: "request", requestId: 2000, method: "echo", params: { marker: "overflow" } });
+  const overflow = await capped.next(message => message.type === "response" && message.requestId === 2000);
+  assert.equal(overflow.error.code, "BRIDGE_OVERLOADED");
+  capped.send({ type: "abandon", requestId: firstIds[0] });
+  await capped.next(message => message.type === "abandon-ack" && message.requestId === firstIds[0]);
+  capped.send({ type: "request", requestId: 2001, method: "fake/stats", params: {} });
+  const capStats = await capped.next(message => message.type === "response" && message.requestId === 2001);
+  assert.equal(capStats.result.counts["trigger/delayed-echo"], CAP);
+  assert.equal(capStats.result.counts.echo, undefined);
+  assert.equal(capHarness.broker.exitCode, null);
+
+  const ttlHarness = await startFakeBroker(t, {
+    CODEX_DESKTOP_BRIDGE_TESTING: "1",
+    CODEX_DESKTOP_BRIDGE_TEST_ROUTE_TTL_MS: "250"
+  });
+  const expiring = await ttlHarness.connect();
+  expiring.send({ type: "request", requestId: 61, method: "trigger/delayed-echo", params: { delayMs: 900, marker: "ttl-late" } });
+  await ttlHarness.desktop.next(message => message.method === "test/delayed-echo-received" && message.params?.marker === "ttl-late");
+  const expired = await expiring.next(message => message.type === "response" && message.requestId === 61);
+  assert.equal(expired.error.code, "BRIDGE_ROUTE_EXPIRED");
+  expiring.send({ type: "request", requestId: 62, method: "fake/stats", params: {} });
+  const ttlStats = await expiring.next(message => message.type === "response" && message.requestId === 62);
+  assert.equal(ttlStats.result.counts["trigger/delayed-echo"], 1);
+  await ttlHarness.desktop.none(message => isLateNativeResponse(message, "ttl-late"), 1000);
+  expiring.send({ type: "request", requestId: 63, method: "echo", params: { marker: "healthy-after-expiry" } });
+  assert.equal(
+    (await expiring.next(message => message.type === "response" && message.requestId === 63)).result.params.marker,
+    "healthy-after-expiry"
+  );
+  assert.equal(ttlHarness.broker.exitCode, null);
+});

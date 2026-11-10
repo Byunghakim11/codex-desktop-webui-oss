@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
@@ -17,29 +17,35 @@
               <div class="brand">Codex</div>
               <div class="connection-row">
                 <span class="connection-dot" aria-hidden="true"></span>
-                <span class="connection" id="connection" data-i18n="connection.connecting">连接中</span>
+                <span class="connection" id="connection" data-i18n="connection.connecting">Connecting</span>
               </div>
             </div>
           </div>
           <div class="brand-actions">
-            <select class="theme-select" id="themeSelect" aria-label="主题" data-i18n-aria-label="theme.label">
-              <option value="system" data-i18n="theme.system">跟随系统</option>
-              <option value="light" data-i18n="theme.light">日间</option>
-              <option value="dark" data-i18n="theme.dark">夜间</option>
+            <label class="visually-hidden" for="themeSelect" data-i18n="theme.label">Theme</label>
+            <select class="theme-select" id="themeSelect" aria-label="Theme" data-i18n-aria-label="theme.label">
+              <option value="system" data-i18n="theme.system">System</option>
+              <option value="light" data-i18n="theme.light">Light</option>
+              <option value="dark" data-i18n="theme.dark">Dark</option>
             </select>
-            <button class="icon-button mobile-only" id="closeSidebar" aria-label="关闭会话列表" data-i18n-aria-label="sidebar.close">×</button>
+            <label class="visually-hidden" for="languageSelect" data-i18n="ui.language.label">Language</label>
+            <select class="language-select" id="languageSelect" aria-label="Language" data-i18n-aria-label="ui.language.label">
+              <option value="en" data-i18n="ui.language.english">English</option>
+              <option value="ko" data-i18n="ui.language.korean">한국어</option>
+            </select>
+            <button class="icon-button mobile-only" id="closeSidebar" aria-label="Close conversation list" data-i18n-aria-label="sidebar.close">×</button>
           </div>
         </div>
 
         <div id="companionApps" class="companion-apps"></div>
         <button class="primary-action new-thread-action" id="newThread">
           <span aria-hidden="true">＋</span>
-          <span data-i18n="thread.new">新会话</span>
+          <span data-i18n="thread.new">New conversation</span>
         </button>
 
         <div class="sidebar-search">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20.2 18.8-4.3-4.3a7 7 0 1 0-1.4 1.4l4.3 4.3 1.4-1.4ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z" /></svg>
-          <input id="searchThreads" aria-label="搜索" data-i18n-aria-label="thread.search" placeholder="搜索会话" data-i18n-placeholder="thread.searchPlaceholder" />
+          <input id="searchThreads" aria-label="Search" data-i18n-aria-label="thread.search" placeholder="Conversation title or content" data-i18n-placeholder="thread.searchPlaceholder" />
         </div>
 
         <div class="thread-list" id="threadList"></div>
@@ -47,37 +53,50 @@
         <section class="usage-card" id="usageCard" aria-labelledby="usageTitle">
           <div class="usage-card-header">
             <div>
-              <strong id="usageTitle" data-i18n="usage.title">用量</strong>
+              <strong id="usageTitle" data-i18n="usage.title">Usage</strong>
               <span id="usagePlan"></span>
             </div>
-            <button class="usage-refresh" id="usageRefresh" type="button" data-i18n-title="usage.refresh" aria-label="刷新用量" data-i18n-aria-label="usage.refresh">↻</button>
+            <button class="usage-refresh" id="usageRefresh" type="button" data-i18n-title="usage.refresh" aria-label="Refresh usage" data-i18n-aria-label="usage.refresh">↻</button>
           </div>
           <div class="usage-windows" id="usageWindows">
-            <div class="usage-empty" data-i18n="usage.loading">正在读取用量…</div>
+            <div class="usage-empty" data-i18n="usage.loading">Reading usage…</div>
           </div>
         </section>
       </aside>
 
       <main class="chat-pane">
         <header class="topbar">
-          <button class="icon-button mobile-only" id="openSidebar" aria-label="打开会话列表" data-i18n-aria-label="sidebar.open">☰</button>
+          <button class="icon-button mobile-only" id="openSidebar" aria-label="Open conversation list" data-i18n-aria-label="sidebar.open">☰</button>
           <div class="thread-title-wrap">
             <div class="thread-title-line">
-              <input class="thread-title" id="threadTitle" placeholder="未选择会话" data-i18n-placeholder="thread.notSelected" disabled />
-              <button class="resume-status" id="resumeStatus" type="button" title="点击连接会话" data-i18n="thread.connect" data-i18n-title="thread.connectTitle">点击连接</button>
-              <button class="activity-toggle" id="activityToggle" type="button" aria-pressed="true" data-i18n="activity.compact" data-i18n-title="activity.toggleHint">Compact</button>
-              <details class="workflow-menu" id="workflowMenu">
-                <summary data-i18n="workflow.tools">Tools</summary>
-                <div id="workflowMenuBody" class="workflow-menu-body"></div>
-              </details>
-              <button class="icon-button fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="切换全屏" title="切换全屏" data-i18n-aria-label="fullscreen.toggle" data-i18n-title="fullscreen.toggle">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path class="fullscreen-icon-enter" d="M8 3H3v5h2V5h3V3Zm8 0v2h3v3h2V3h-5ZM5 16H3v5h5v-2H5v-3Zm14 3h-3v2h5v-5h-2v3Z" />
-                  <path class="fullscreen-icon-exit" d="M5 16h3v3h2v-5H5v2Zm3-8H5v2h5V5H8v3Zm6 11h2v-3h3v-2h-5v5Zm2-11V5h-2v5h5V8h-3Z" />
-                </svg>
-              </button>
+              <div class="thread-title-block">
+                <input class="thread-title" id="threadTitle" placeholder="No conversation selected" data-i18n-placeholder="thread.notSelected" disabled />
+                <div class="thread-breadcrumb" id="threadBreadcrumb" data-i18n="ui.header.noProject">No project</div>
+              </div>
+              <button class="resume-status" id="resumeStatus" type="button" title="Connect conversation" data-i18n="thread.connect" data-i18n-title="thread.connectTitle">Connect</button>
+              <div class="header-actions" id="headerActions" role="toolbar" aria-label="Header actions" data-i18n-aria-label="ui.header.actions">
+                <span class="header-slot" id="headerSearchSlot"></span>
+                <span class="header-slot" id="headerBookmarksSlot"></span>
+                <details class="workflow-menu" id="workflowMenu">
+                  <summary data-i18n="ui.header.more">More</summary>
+                  <div id="workflowMenuBody" class="workflow-menu-body"></div>
+                </details>
+                <button class="icon-button header-files" id="headerFilesButton" type="button" aria-controls="filesPanel" aria-expanded="false" aria-label="Files" title="Files" data-i18n-aria-label="ui.header.files" data-i18n-title="ui.header.files" disabled>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Z" /></svg>
+                  <span class="header-button-label" data-i18n="ui.header.files">Files</span>
+                </button>
+                <button class="activity-toggle" id="activityToggle" type="button" aria-pressed="true" data-i18n="ui.header.activity" data-i18n-title="activity.toggleHint">Activity</button>
+                <span class="header-connection" id="headerConnection" data-i18n="connection.connecting">Connecting</span>
+                <span class="header-build" id="headerBuild" title="WebUI build"></span>
+                <button class="icon-button fullscreen-toggle" id="fullscreenToggle" type="button" aria-label="Toggle fullscreen" title="Toggle fullscreen" data-i18n-aria-label="fullscreen.toggle" data-i18n-title="fullscreen.toggle">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path class="fullscreen-icon-enter" d="M8 3H3v5h2V5h3V3Zm8 0v2h3v3h2V3h-5ZM5 16H3v5h5v-2H5v-3Zm14 3h-3v2h5v-5h-2v3Z" />
+                    <path class="fullscreen-icon-exit" d="M5 16h3v3h2v-5H5v2Zm3-8H5v2h5V5H8v3Zm6 11h2v-3h3v-2h-5v5Zm2-11V5h-2v5h5V8h-3Z" />
+                  </svg>
+                </button>
+              </div>
             </div>
-            <div class="thread-meta" id="threadMeta" data-i18n="common.ready">准备就绪</div>
+            <div class="thread-meta" id="threadMeta" data-i18n="common.ready">Ready</div>
           </div>
         </header>
 
@@ -89,40 +108,40 @@
 
         <section class="auth-panel hidden" id="authPanel">
           <div>
-            <strong data-i18n="auth.required">需要登录 Codex</strong>
-            <p id="authText" data-i18n="auth.description">可以使用设备码完成登录。</p>
+            <strong data-i18n="auth.required">Codex sign-in required</strong>
+            <p id="authText" data-i18n="auth.description">Sign in with a device code.</p>
           </div>
-          <button class="secondary-action" id="deviceLogin" data-i18n="auth.deviceLogin">设备码登录</button>
+          <button class="secondary-action" id="deviceLogin" data-i18n="auth.deviceLogin">Device sign-in</button>
         </section>
 
         <section class="approval-panel hidden" id="approvalPanel"></section>
         <section class="messages" id="messages">
           <div class="empty-state">
-            <h1 data-i18n="empty.chooseTitle">选择或创建一个会话</h1>
-            <p data-i18n="empty.chooseDescription">连接 Codex Desktop 后，即可在此继续已有对话。</p>
+            <h1 data-i18n="empty.chooseTitle">Choose or create a conversation</h1>
+            <p data-i18n="empty.chooseDescription">Continue conversations through your connected Codex Desktop.</p>
           </div>
         </section>
 
         <form class="composer" id="composer">
-          <div class="follow-up-menu hidden" id="followUpMenu" role="menu" aria-label="选择后续消息方式" data-i18n-aria-label="composer.chooseFollowUpTitle">
+          <div class="follow-up-menu hidden" id="followUpMenu" role="menu" aria-label="Choose follow-up behavior" data-i18n-aria-label="composer.chooseFollowUpTitle">
             <button class="follow-up-option" type="button" role="menuitem" data-follow-up-mode="steer">
-              <strong data-i18n="composer.steerOption">立即引导</strong>
-              <span data-i18n="composer.steerOptionDescription">插入并调整当前回复</span>
+              <strong data-i18n="composer.steerOption">Guide now</strong>
+              <span data-i18n="composer.steerOptionDescription">Insert into and adjust the current response</span>
             </button>
             <button class="follow-up-option" type="button" role="menuitem" data-follow-up-mode="queue">
-              <strong data-i18n="composer.queueOption">加入列队</strong>
-              <span data-i18n="composer.queueOptionDescription">当前回复结束后按顺序执行</span>
+              <strong data-i18n="composer.queueOption">Join queue</strong>
+              <span data-i18n="composer.queueOptionDescription">Run in order after the current response</span>
             </button>
             <button class="follow-up-option danger" type="button" role="menuitem" data-follow-up-mode="stop">
-              <strong data-i18n="composer.stopOption">停止当前回复</strong>
-              <span data-i18n="composer.stopOptionDescription">保留已有内容并中断正在执行的任务</span>
+              <strong data-i18n="composer.stopOption">Stop current response</strong>
+              <span data-i18n="composer.stopOptionDescription">Keep existing output and interrupt the running task</span>
             </button>
           </div>
-          <textarea id="promptInput" rows="1" placeholder="发消息给 Codex" data-i18n-placeholder="composer.placeholder"></textarea>
-          <button class="send-button" id="sendButton" type="submit" data-i18n="composer.send" aria-label="发送" disabled>发送</button>
+          <textarea id="promptInput" rows="1" placeholder="Message Codex" data-i18n-placeholder="composer.placeholder"></textarea>
+          <button class="send-button" id="sendButton" type="submit" data-i18n="composer.send" aria-label="Send" disabled>Send</button>
           <div class="workflow-drafts" id="workflowDraftControls">
             <small data-i18n="draft.privacy">Drafts stay in this tab; refresh or close deletes them. Inactive: 30 min. Max 10 / 64 KiB each / 512 KiB total.</small>
-            <div><button id="workflowClear" type="button" data-i18n="draft.clear">Clear</button><button id="workflowUndo" type="button" data-i18n="draft.undo">Undo clear (60s)</button><button id="workflowForget" type="button" data-i18n="draft.forget">Delete preserved draft</button><button id="workflowRecover" type="button" data-i18n="draft.recovery">Review failed send</button></div>
+            <div><button id="workflowClear" type="button" data-i18n="draft.clear">Clear text</button><button id="workflowUndo" type="button" data-i18n="draft.undo">Undo clear (60s)</button><button id="workflowForget" type="button" data-i18n="draft.forget">Delete preserved draft</button><button id="workflowRecover" type="button" data-i18n="draft.recovery">Review failed send</button></div>
             <small id="workflowDraftStatus" role="status"></small>
           </div>
         </form>
@@ -130,32 +149,32 @@
         <section class="setup-band" id="setupBand">
           <div class="setup-grid">
             <label class="cwd-setting">
-              <span data-i18n="settings.cwd">工作目录</span>
+              <span data-i18n="settings.cwd">Working directory</span>
               <input id="cwdInput" class="field" readonly />
             </label>
             <label class="context-setting">
-              <span id="contextSettingLabel">当前会话</span>
+              <span id="contextSettingLabel" data-i18n="settings.currentConversation">Current conversation</span>
               <div class="setting-summary" id="currentConversationSummary"></div>
               <div class="field-action-row hidden" id="workspaceSettingControls">
                 <select id="projectSelect" class="field"></select>
-                <button id="browseWorkspace" class="secondary-action compact-action" type="button" data-i18n="workspace.choose">选择工作区</button>
+                <button id="browseWorkspace" class="secondary-action compact-action" type="button" data-i18n="workspace.choose">Choose workspace</button>
               </div>
             </label>
             <label>
-              <span data-i18n="settings.model">模型</span>
+              <span data-i18n="settings.model">Model</span>
               <select id="modelSelect" class="field"></select>
             </label>
             <label>
-              <span data-i18n="settings.reasoning">推理强度</span>
+              <span data-i18n="settings.reasoning">Reasoning effort</span>
               <select id="reasoningSelect" class="field">
-                <option value="low" data-i18n="reasoning.low">轻度</option>
-                <option value="medium" data-i18n="reasoning.medium">中</option>
-                <option value="high" data-i18n="reasoning.high">高</option>
-                <option value="xhigh" data-i18n="reasoning.xhigh">极高</option>
+                <option value="low" data-i18n="reasoning.low">Low</option>
+                <option value="medium" data-i18n="reasoning.medium">Medium</option>
+                <option value="high" data-i18n="reasoning.high">High</option>
+                <option value="xhigh" data-i18n="reasoning.xhigh">Extra high</option>
               </select>
             </label>
             <label>
-              <span data-i18n="settings.permissionMode">权限模式</span>
+              <span data-i18n="settings.permissionMode">Permission mode</span>
               <select id="permissionSelect" class="field"></select>
             </label>
           </div>
@@ -166,26 +185,26 @@
     </div>
 
     <div class="workspace-picker hidden" id="workspacePicker" role="dialog" aria-modal="true" aria-labelledby="workspacePickerTitle">
-      <button class="workspace-picker-backdrop" id="workspacePickerBackdrop" type="button" aria-label="关闭工作区选择" data-i18n-aria-label="workspace.close"></button>
+      <button class="workspace-picker-backdrop" id="workspacePickerBackdrop" type="button" aria-label="Close workspace picker" data-i18n-aria-label="workspace.close"></button>
       <section class="workspace-picker-panel">
         <header class="workspace-picker-header">
           <div>
-            <strong id="workspacePickerTitle" data-i18n="workspace.title">选择电脑工作区</strong>
+            <strong id="workspacePickerTitle" data-i18n="workspace.title">Choose a computer workspace</strong>
             <div class="workspace-current-path" id="workspaceCurrentPath"></div>
           </div>
-          <button class="icon-button" id="workspacePickerClose" type="button" aria-label="关闭" data-i18n-aria-label="workspace.close">×</button>
+          <button class="icon-button" id="workspacePickerClose" type="button" aria-label="Close" data-i18n-aria-label="workspace.close">×</button>
         </header>
         <div class="workspace-picker-actions">
           <div class="workspace-navigation-actions">
-            <button class="secondary-action" id="workspaceRoots" type="button" data-i18n="workspace.locations">位置</button>
-            <button class="secondary-action" id="workspaceParent" type="button" data-i18n="workspace.parent">上一级</button>
+            <button class="secondary-action" id="workspaceRoots" type="button" data-i18n="workspace.locations">Locations</button>
+            <button class="secondary-action" id="workspaceParent" type="button" data-i18n="workspace.parent">Parent</button>
           </div>
-          <button class="primary-action" id="workspaceUseCurrent" type="button" data-i18n="workspace.useCurrent">使用此文件夹</button>
+          <button class="primary-action" id="workspaceUseCurrent" type="button" data-i18n="workspace.useCurrent">Use this folder</button>
         </div>
         <div class="workspace-directory-list" id="workspaceDirectoryList"></div>
         <form class="workspace-create" id="workspaceCreateForm">
-          <input class="field" id="workspaceName" maxlength="128" placeholder="新工作区名称" data-i18n-placeholder="workspace.namePlaceholder" />
-          <button class="secondary-action" type="submit" data-i18n="workspace.create">新建并使用</button>
+          <input class="field" id="workspaceName" maxlength="128" placeholder="New workspace name" data-i18n-placeholder="workspace.namePlaceholder" />
+          <button class="secondary-action" type="submit" data-i18n="workspace.create">Create and use</button>
         </form>
         <div class="workspace-error hidden" id="workspaceError" role="alert"></div>
       </section>

@@ -28,4 +28,6 @@ test("scoped tokens only receive known or in-scope thread notifications", () => 
     thread: { cwd: path.join(process.cwd(), "outside") }
   }), false);
   assert.equal(canReceiveThreadContext(scope, { threadId: "unknown-thread" }), false);
+  assert.equal(canReceiveThreadContext(scope,{threadId:"known-thread",thread:{cwd:path.join(process.cwd(),"outside")}}),false);
+  assert.equal(canReceiveThreadContext(scope,{threadId:"known-thread"}),false,"a changed cwd invalidates the old visibility grant");
 });

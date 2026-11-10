@@ -16,6 +16,16 @@ Windows의 Codex Desktop을 켜둔 채 브라우저에서 **같은 실행 엔진
 - 디렉터리 범위 접근 토큰과 선택적인 Cloudflare Tunnel + Access 인증.
 - 사용자가 직접 설정하는 선택적 외부 앱 바로가기. 기본 접속 주소는 없습니다.
 
+### 0.2.0 추가 기능
+
+- 대화·메시지·파일 우클릭 메뉴, 대화 즐겨찾기와 메시지 북마크, 프로젝트별 새 대화 `+`.
+- 폴더 생성·대상 폴더 업로드·드롭, 이름 충돌 시 원본 보존, UTF-8 Markdown 편집·명시적 저장·충돌 및 복구 보호.
+- 일반 문서 첨부와 원본 다운로드, 한국어·English 선택, `/` 명령과 `@` 프로젝트 파일 검색.
+- 기존 엔진의 목표·반복 작업 및 대화 작업, 지원되는 계획 모드·메모리·MCP·스킬·플러그인 조회.
+- 연결 heartbeat·재접속·요청 deadline·늦은 응답 격리. 재접속으로 메시지·답변·파일 작업을 자동 재전송하지 않습니다.
+
+네이티브 기능은 설치 버전과 계정에 따라 제공 범위가 다릅니다. [검토 기록](docs/implementation/reliability-review.md)과 [수동 확인 목록](docs/implementation/release-checklist.md)을 참고하세요.
+
 ## 설치
 
 필요 조건: Windows, Node.js 22.13 이상, PowerShell 7 이상, 로그인된 Codex Desktop. Windows native bridge를 사용합니다. Linux/macOS용 Desktop bridge 지원을 주장하지 않습니다.

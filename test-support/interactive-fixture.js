@@ -46,6 +46,7 @@ export async function startInteractiveFixture({ projectDir = rootDir, nativeChan
   const env = {
     ...process.env,
     CODEX_WEBUI_DATA_DIR: dataDir,
+    CODEX_HOME: path.join(dataDir, "codex-home"),
     CODEX_WEBUI_TOKEN: token,
     CODEX_WEBUI_TOKEN_SCOPES: JSON.stringify([{ id: "folder", token: folderToken, cwd: projectDir }, { id: "outside", token: outsideToken, cwd: outside }]),
     CODEX_WEBUI_HOST_ADDRESS: "127.0.0.1", HOST: "127.0.0.1", PORT: String(port), CODEX_WEBUI_PORT: String(port), CODEX_WEBUI_TERMINAL_QR: "0",
@@ -132,10 +133,15 @@ export async function startInteractiveFixture({ projectDir = rootDir, nativeChan
       await desktop.next(message => message.id === id && !message.method);
     },
     respondNative(id, result) { broker.stdin.write(`${JSON.stringify({ id, result })}\n`); },
+    async nativeRequest(method,params={}){
+      const id=controlId++;broker.stdin.write(`${JSON.stringify({id,method,params})}\n`);const reply=await desktop.next(message=>message.id===id&&!message.method);if(reply.error)throw Error(String(reply.error.message||reply.error));return reply.result;
+    },
     async restartWebUi() {
       const ownedPid = Number(stderr.match(/Started Desktop-managed WebUI[^\n]*PID (\d+)/)?.[1]);
       if (!ownedPid) throw new Error("Owned fixture WebUI PID unavailable");
-      process.kill(ownedPid); await delay(150);
+      if(externalUi&&externalUi.exitCode===null){externalUi.kill();await Promise.race([new Promise(resolve=>externalUi.once('exit',resolve)),delay(2000)]);}
+      else if(!externalUi)process.kill(ownedPid);
+      await delay(150);
       externalUi = spawn(process.execPath, [path.join(rootDir, "server/index.js")], { cwd: rootDir, env, windowsHide: true, stdio: "ignore" });
       await ready();
     }

@@ -1,0 +1,4 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {startInteractiveFixture} from '../test-support/interactive-fixture.js';
+test('metadata-only scoped read reuses its fresh native authorization result',async()=>{
+ const f=await startInteractiveFixture();try{const client=await f.connect(f.folderToken),before=await f.nativeRequest('fake/stats');const result=await client.rpc('thread/read',{threadId:'thread-fixture',includeTurns:false});assert.equal(result.thread.id,'thread-fixture');const after=await f.nativeRequest('fake/stats');assert.equal((after.counts['thread/read']||0)-(before.counts['thread/read']||0),1);client.close();const denied=await f.connect(f.outsideToken);await assert.rejects(denied.rpc('thread/read',{threadId:'thread-fixture',includeTurns:false}));denied.close();}finally{await f.close();}
+});

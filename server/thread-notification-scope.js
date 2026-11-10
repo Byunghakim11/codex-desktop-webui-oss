@@ -3,9 +3,9 @@ import path from "node:path";
 export function canReceiveThreadContext(scope, context) {
   const roots = scopeRoots(scope);
   if (!context?.threadId || !roots.length) return true;
-  if (scope?.visibleThreadIds?.has(context.threadId)) return true;
   const cwd = normalizeLocalPath(context.thread?.cwd || "");
-  if (!cwd || !roots.some((root) => isPathInside(root, cwd))) return false;
+  if (!cwd) return Boolean(scope?.visibleThreadIds?.has(context.threadId));
+  if (!roots.some((root) => isPathInside(root, cwd))) { scope?.visibleThreadIds?.delete(context.threadId); return false; }
   scope?.visibleThreadIds?.add(context.threadId);
   return true;
 }

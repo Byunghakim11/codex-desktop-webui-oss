@@ -3083,3 +3083,678 @@ body {
 #workflowDraftStatus { flex-basis:100%; }
 @media(max-width:900px) { .chat-pane .messages { height:calc(var(--visual-viewport-height) - var(--mobile-topbar-height) - var(--mobile-composer-height) - var(--workflow-status-height,0px)); } .workflow-menu-body { position:fixed; left:16px; right:auto; top:calc(var(--mobile-topbar-height,62px) + 6px); width:min(330px,calc(100vw - 32px)); max-height:calc(var(--visual-viewport-height,100dvh) - var(--visual-viewport-offset-top,0px) - var(--mobile-topbar-height,62px) - 22px); } }
 @media(max-width:600px) { .workflow-drafts { margin:0; } .wf-conversation-search { padding:6px 8px; } .wf-dialog { padding:12px; } }
+
+/* ==========================================================================
+   Compact header, favorite threads, project rows, portal context menu.
+   Token-only colors: no palette literals, no new assets/fonts.
+   The header is a single row; it intentionally does NOT use the
+   --visual-viewport-offset-top / transform tricks the Files drawer uses, so
+   the new header can never double-offset the old viewport variables.
+   ========================================================================== */
+
+/* Accessible label: clipped, never display:none. */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- Header shell: one row, no orphan tools line ---- */
+.topbar {
+  flex-wrap: nowrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.thread-title-wrap {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.thread-title-line {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Title + breadcrumb stack, both shrinkable with ellipsis. */
+.thread-title-block {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.thread-title-block .thread-title {
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-breadcrumb {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Header action cluster ---- */
+.header-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* Wrapper slots must not add boxes or gaps of their own. */
+.header-slot {
+  display: contents;
+}
+
+.header-actions .workflow-menu {
+  justify-self: auto;
+}
+
+.header-tool-button,
+.header-files {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.header-tool-button:hover:not(:disabled),
+.header-files:hover:not(:disabled) {
+  background: var(--pill);
+  border-color: var(--muted);
+}
+
+.header-tool-button[aria-expanded="true"],
+.header-tool-button[aria-pressed="true"],
+.header-files[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.header-tool-button:disabled,
+.header-files:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.header-files svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  fill: currentColor;
+}
+
+.header-button-label {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.header-tool-button:focus-visible,
+.header-files:focus-visible,
+.fullscreen-toggle:focus-visible,
+.resume-status:focus-visible,
+.activity-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Connection chip: state comes from data-state set in header.js/app.js. */
+.header-connection {
+  display: inline-block;
+  flex: 0 0 auto;
+  max-width: 168px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-connection[data-state="connected"] {
+  border-color: color-mix(in srgb, var(--connected) 45%, var(--line));
+  background: var(--connected-soft);
+  color: var(--connected);
+}
+
+.header-connection[data-state="app"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.header-connection[data-state="reconnecting"] {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: var(--warning-bg);
+  color: var(--warn);
+}
+
+.header-connection[data-state="offline"] {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  background: transparent;
+  color: var(--muted);
+}
+
+/* Language selector mirrors the existing theme selector. */
+.language-select {
+  width: 88px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  outline: none;
+  cursor: pointer;
+}
+
+.language-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Drop menus: clamped and scrollable instead of overflowing the viewport. */
+.workflow-menu-body {
+  max-height: min(70dvh, calc(100dvh - 96px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ---- Sidebar: project disclosure row + sibling new-thread button ---- */
+.project-heading-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 4px;
+}
+
+.project-heading-row .project-heading {
+  min-width: 0;
+  grid-template-columns: 18px 20px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 0 6px;
+}
+
+.project-heading-row .project-chevron {
+  display: inline-block;
+  font-size: 13px;
+  line-height: 1;
+  transform-origin: 50% 50%;
+  transition: transform 120ms ease;
+}
+
+.project-group:not(.collapsed) .project-heading-row .project-chevron {
+  transform: rotate(90deg);
+}
+
+.project-new-thread {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.project-new-thread:hover {
+  border-color: var(--line);
+  background: var(--pill);
+  color: var(--ink);
+}
+
+.project-new-thread:focus-visible,
+.project-heading:focus-visible,
+.expand-project:focus-visible,
+.thread-favorite:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 7px;
+}
+
+/* ---- Favorite threads ---- */
+.favorite-thread-group {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding-bottom: 8px;
+}
+
+/* Only rows that actually carry a star get the four-column layout, so the
+   empty-state row keeps its two-column shape. */
+.thread-item:has(> .thread-favorite) {
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 8px;
+}
+
+.thread-favorite {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.55;
+  cursor: pointer;
+  user-select: none;
+}
+
+.thread-favorite:hover {
+  background: var(--pill);
+  color: var(--ink);
+  opacity: 1;
+}
+
+.thread-favorite.active {
+  color: var(--warn);
+  opacity: 1;
+}
+
+/* ---- Body-portalled context menu ---- */
+/* z-index sits above the Files backdrop (74) / panel (75) / edge toggle (76)
+   while staying below the toast region (1200). Native <dialog> is top-layer
+   and is deliberately left untouched here. */
+.ui-context-menu {
+  position: fixed;
+  z-index: 900;
+  min-width: 180px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: min(70dvh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  text-align: left;
+}
+
+.ui-context-menu[hidden],
+.ui-context-menu-item[hidden],
+.ui-context-menu-separator[hidden] {
+  display: none !important;
+}
+
+.ui-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ui-context-menu-item:hover,
+.ui-context-menu-item[data-active="true"] {
+  background: var(--pill);
+  color: var(--ink);
+}
+
+.ui-context-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.ui-context-menu-item:disabled,
+.ui-context-menu-item[aria-disabled="true"] {
+  opacity: 0.5;
+  background: transparent;
+  cursor: default;
+}
+
+.ui-context-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  border: 0;
+  background: var(--line);
+}
+
+/* ---- Responsive header ---- */
+@media (max-width: 1180px) {
+  .header-button-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .header-actions {
+    gap: 4px;
+  }
+
+  .header-tool-button,
+  .header-files {
+    min-width: 32px;
+    padding: 0 6px;
+  }
+
+  .header-connection {
+    max-width: 120px;
+  }
+}
+
+@media (max-width: 900px) {
+  .topbar {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .thread-title-line {
+    gap: 4px;
+  }
+
+  .thread-title {
+    min-height: 30px;
+    font-size: 15px;
+  }
+
+  .resume-status {
+    padding: 0 8px;
+    min-height: 30px;
+    font-size: 12px;
+  }
+
+  .activity-toggle {
+    padding: 0 6px;
+    min-height: 32px;
+    font-size: 11px;
+  }
+
+  .fullscreen-toggle {
+    width: 32px;
+    height: 32px;
+  }
+
+  .project-heading-row .project-heading {
+    grid-template-columns: 16px 18px minmax(0, 1fr) auto;
+    gap: 6px;
+    padding: 0 4px;
+  }
+}
+
+@media (max-width: 600px) {
+  .thread-breadcrumb {
+    font-size: 10px;
+  }
+
+  .header-connection {
+    max-width: 92px;
+    padding: 3px 7px;
+    font-size: 10px;
+  }
+
+  /* Compact status dot: text stays in the DOM for assistive tech. */
+  .header-connection:not([data-state="connected"]):not([data-state="app"]) {
+    max-width: none;
+  }
+
+  .project-new-thread {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+  }
+}
+
+/* 320px-class screens: keep the cluster on one row and shrink the chip. */
+@media (max-width: 380px) {
+  .topbar {
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .header-connection {
+    max-width: 14px;
+    padding: 0;
+    border-radius: 999px;
+    border-color: currentColor;
+    background: currentColor;
+    color: var(--muted);
+    font-size: 0;
+    line-height: 0;
+    text-indent: -9999px;
+  }
+
+  .header-connection[data-state="connected"] { color: var(--connected); }
+  .header-connection[data-state="app"] { color: var(--accent-strong); }
+  .header-connection[data-state="reconnecting"] { color: var(--warn); }
+
+  .header-tool-button,
+  .header-files,
+  .fullscreen-toggle {
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    padding: 0 5px;
+  }
+
+  .thread-title {
+    font-size: 14px;
+  }
+
+  .ui-context-menu {
+    max-width: calc(100vw - 12px);
+    max-height: min(65dvh, 380px);
+  }
+}
+
+/* Short viewports (e.g. 450px tall) must not push or clip the header. */
+@media (max-height: 450px) {
+  .topbar {
+    padding: 4px 10px;
+  }
+
+  .thread-title {
+    min-height: 26px;
+    font-size: 14px;
+  }
+
+  .thread-breadcrumb {
+    font-size: 10px;
+  }
+
+  .workflow-menu-body {
+    max-height: min(60dvh, calc(100dvh - 56px));
+  }
+
+  .ui-context-menu {
+    max-height: min(60dvh, 300px);
+  }
+}
+
+/* Touch targets: 44px where a finger is the pointer. */
+@media (pointer: coarse) {
+  .header-tool-button,
+  .header-files,
+  .fullscreen-toggle,
+  .activity-toggle {
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .language-select {
+    min-height: 44px;
+  }
+
+  .project-new-thread {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+  }
+
+  .project-heading {
+    min-height: 44px;
+  }
+
+  .thread-favorite {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    font-size: 16px;
+    opacity: 0.75;
+  }
+
+  .ui-context-menu-item {
+    min-height: 44px;
+    font-size: 13px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-heading-row .project-chevron {
+    transition: none;
+  }
+}
+
+.file-attachment-chip { display:flex; flex:0 1 320px; max-width:min(440px,100%); gap:8px; padding:8px 10px; }
+.file-attachment-icon { font-size:24px; line-height:1; flex:none; color:var(--accent); }
+.file-attachment-label { display:flex; flex:1; flex-direction:column; min-width:0; gap:3px; }
+.file-attachment-label strong { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:12px; }
+.file-attachment-label small { overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:11px; line-height:1.35; }
+.file-attachment-chip button { flex:none; min-width:28px; min-height:28px; }
+.file-attachment-chip button:disabled { opacity:.4; cursor:default; }
+.file-attachment-chip.unknown { border-color:var(--warn); }
+.file-attachment-chip.failed { border-color:var(--danger); }
+.attachment-reconcile { align-self:center; padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); }
+@media (pointer:coarse) { .file-attachment-chip button { min-width:44px; min-height:44px; } }
+
+.file-node { position:relative; }
+.file-node > .file-row { padding-right:36px; }
+.file-node > .file-more { position:absolute; right:4px; top:3px; width:28px; height:28px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--ink); }
+.file-node > .file-more[hidden] { display:none; }
+.files-uploads { display:grid; gap:6px; padding:0 12px; max-height:180px; overflow:auto; }
+.files-uploads:empty { display:none; }
+.files-dialog { width:min(460px,calc(100vw - 32px)); padding:20px; border:1px solid var(--line); border-radius:14px; color:var(--ink); background:var(--panel); }
+.files-dialog::backdrop { background:#0006; }
+.file-editor { display:grid; min-width:0; gap:10px; }
+.file-editor-toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.file-editor-toolbar button { padding:7px 10px; border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--ink); }
+.file-editor-input { display:block; width:100%; min-width:0; min-height:280px; max-height:65dvh; resize:vertical; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--ink); font:13px/1.6 ui-monospace,Consolas,monospace; tab-size:4; }
+.file-editor-status { color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+.file-editor-dialog { width:min(460px,calc(100vw - 32px)); padding:20px; border:1px solid var(--line); border-radius:14px; background:var(--panel); color:var(--ink); }
+.file-editor-dialog::backdrop { background:#0006; }
+.file-editor-dialog-actions { display:flex; flex-wrap:wrap; gap:8px; }
+@media (pointer:coarse) { .file-node > .file-more { min-width:40px; min-height:40px; top:0; } .file-node > .file-row { min-height:44px; padding-right:48px; } }
+@media (pointer:coarse) { .file-node > .file-more { min-width:44px; min-height:44px; } }
+
+.composer { position:relative; }
+.composer-assist { position:absolute; bottom:100%; left:12px; right:12px; z-index:40; max-height:320px; overflow:auto; padding:6px; border:1px solid var(--line); border-radius:12px; background:var(--panel); box-shadow:0 8px 28px #0003; }
+.composer-assist-option { padding:10px 12px; border-radius:7px; font-size:13px; cursor:pointer; }
+.composer-assist-option[aria-selected="true"] { background:var(--pill); outline:1px solid var(--line); }
+.composer-assist-option[aria-disabled="true"] { opacity:.5; cursor:default; }
+.composer-assist-status { padding:12px; font-size:13px; color:var(--muted); }
+.native-dialog-host .field { display:flex; flex-direction:column; gap:6px; margin:12px 0; }
+.native-dialog-host .field-input { padding:9px; border:1px solid var(--workflow-border); border-radius:8px; color:inherit; background:var(--bg); }
+.native-dialog-host .native-loop-list { display:grid; gap:8px; }
+.native-loop-row { border:1px solid var(--workflow-border); padding:12px; border-radius:9px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.native-loop-row-name { flex:1 1 180px; font-weight:600; }
+.native-loop-row-status,.native-loop-row-interval { color:var(--muted); font-size:12px; }
+.native-dialog-host .wf-dialog-confirm { white-space:pre-wrap; background:#d9770615; border-radius:8px; padding:10px; }
+.native-dialog-host .wf-dialog-confirm:empty { display:none; }
+.header-build { color:var(--muted); font:10px/1.3 ui-monospace,monospace; white-space:nowrap; }
+.chat-attachment-downloads { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
+.chat-attachment-download { border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:var(--panel); color:var(--ink); cursor:pointer; font:inherit; font-size:12px; }
+.native-thread-review { display:flex; gap:8px; align-items:flex-start; margin:12px 0; }
+.native-thread-form .field-input { width:100%; box-sizing:border-box; }
+.native-thread-status { white-space:pre-wrap; }
+.native-utility-body { display:flex; flex-wrap:wrap; gap:8px; }
+.native-utility-body .native-utility-result { width:100%; max-height:42vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:10px; background:var(--surface); border-radius:8px; }
+.native-utility-status { white-space:pre-wrap; }
+
+@media (min-width:901px) {
+  .app-shell.files-open .thread-title-line { grid-template-columns:minmax(0,1fr) auto; }
+  .app-shell.files-open .header-actions { grid-column:1 / -1; width:100%; flex-wrap:wrap; justify-content:flex-start; }
+}
+.file-editor-host:not(:empty) { flex:1 1 auto; min-height:260px; overflow:auto; padding:12px; }
+.files-panel:has(.file-editor-host:not(:empty)) .files-preview { display:none; }
+.file-editor-host:empty { display:none; }
+
+@media (max-width:900px) {
+  .topbar { align-items:flex-start; }
+  .thread-title-line { grid-template-columns:minmax(0,1fr) auto; }
+  .header-actions { grid-column:1 / -1; width:100%; flex-wrap:wrap; justify-content:flex-start; }
+  .header-actions .header-connection { width:10px; min-width:10px; max-width:10px; height:10px; padding:0; overflow:hidden; font-size:0; border-radius:50%; background:var(--connected); }
+  .header-actions .header-connection[data-state="offline"] { background:var(--danger); }
+  .header-actions .header-connection[data-state="reconnecting"] { background:var(--warn); }
+  .brand-row { flex-wrap:wrap; }
+  .brand-actions { gap:6px; }
+}

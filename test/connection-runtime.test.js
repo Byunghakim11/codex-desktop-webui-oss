@@ -1,0 +1,7 @@
+import test from "node:test";import assert from "node:assert/strict";import {fetchConnectionInfo,isReadRpc,rpcDeadlineMs,connectionRuntimeMessages} from "../public/connection-runtime.js";
+test("bootstrap distinguishes transient transport failure from confirmed authentication failure",async()=>{
+ for(const fetchImpl of [async()=>({ok:false,status:502}),async()=>{throw Error("offline");},async()=>({ok:true,json:async()=>{throw Error("HTML");}})])assert.equal((await fetchConnectionInfo("/api/info",{fetchImpl})).kind,"unavailable");
+ for(const response of [{status:401},{status:403},{type:"opaqueredirect"},{ok:true,json:async()=>({authenticated:false})}])assert.equal((await fetchConnectionInfo("/api/info",{fetchImpl:async()=>response})).kind,"auth-required");
+ const result=await fetchConnectionInfo("/api/info",{fetchImpl:async(_url,options)=>{assert.equal(options.redirect,"manual");assert.ok(options.signal);return {ok:true,json:async()=>({authenticated:true,authMode:"cloudflare-access"})};}});assert.equal(result.kind,"ready");
+});
+test("deadlines distinguish reads from uncertain native mutations",()=>{assert.equal(isReadRpc("thread/list"),true);for(const method of ["turn/start","thread/start","thread/settings/update","unknown/native/action"])assert.equal(isReadRpc(method),false);assert.ok(rpcDeadlineMs("thread/list")>=15000);assert.ok(rpcDeadlineMs("turn/start")>rpcDeadlineMs("thread/list"));assert.deepEqual(Object.keys(connectionRuntimeMessages.en).sort(),Object.keys(connectionRuntimeMessages.ko).sort());});
