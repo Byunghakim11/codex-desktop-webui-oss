@@ -3073,7 +3073,9 @@ body {
 .wf-dialog p,.wf-copy-hint,.wf-masking-note { font-size:12px; line-height:1.6; }
 .workflow-feedback { display:flex; align-items:center; gap:8px; padding:8px 16px; border-bottom:1px solid var(--workflow-border); font-size:12px; }
 .workflow-feedback span { flex:1; }
-.workflow-status-area { grid-row:2; min-width:0; }
+.workflow-status-area { grid-row:2; min-width:0; position:relative; }
+.workflow-status-area > .connection-banner { position:absolute; inset-inline:0; top:0; z-index:45; box-shadow:0 4px 12px rgba(0,0,0,.12); }
+.chat-pane.resuming-thread::after { animation:none; }
 .workflow-drafts { grid-column:1/-1; grid-row:2; font-size:11px; line-height:1.4; color:var(--muted,#999); display:flex; flex-wrap:wrap; gap:4px 10px; align-items:center; }
 .composer.has-image-tray .workflow-drafts { grid-row:3; }
 .workflow-drafts > small:first-child { flex:1 1 290px; }

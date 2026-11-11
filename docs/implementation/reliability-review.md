@@ -53,6 +53,33 @@ uses a durable recovery copy but does not promise power-failure atomic replaceme
 
 ## Adoption and limits
 
+### 0.2.1 connection-loop correction
+
+Repeated long-conversation navigation exposed a case that the original short
+recovery checks did not cover. A native `thread/resume` response still included
+legacy `thread.turns` even when `initialTurnsPage` was supplied. A measured response
+was about 19.6 MB. The documented native `excludeTurns: true` option reduced the
+same settings read to about 4.2 KB. The WebUI now enforces this option at its server
+boundary; paginated conversation history remains a separate read and continues
+to use full detail when opened in the foreground.
+
+Native recovery has one bounded retry owner. Background history and manifest reads
+wait for native readiness and an authoritative current profile. A failed profile
+read exposes a retry control; successful recovery explicitly updates Send readiness.
+New drafts clear the previous conversation's stale-profile flag after the draft
+transition succeeds. Shallow background previews use native summaries and are
+refreshed with full detail when opened.
+
+Valid authentication no longer resets the backoff after every short transport
+failure. Transient reconnect states use the header indicator. Persistent connection
+banners overlay their status area, so showing a notice does not resize the chat.
+Recovery never replays a user submission, permission answer or file mutation.
+
+The regression checks include an isolated native-status outage, stable message-pane
+geometry, retained composer text and pending question answers, restored Send
+readiness, three WebUI-only restarts and repeated conversation navigation. These
+checks are separate from a production/company-network observation.
+
 Copying source is insufficient to prove the running build adopted it. Bridge process
 changes require a controlled Desktop restart after other work has finished. Preserve
 runtime data and verify the authenticated bridge, build and expected processes afterward.

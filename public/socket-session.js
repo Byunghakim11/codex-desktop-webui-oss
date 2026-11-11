@@ -18,7 +18,7 @@ export function createSocketSession({url,createSocket=value=>new WebSocket(value
   try{result=await Promise.race([Promise.resolve().then(probeAuth),new Promise(resolve=>{timer=setTimer(()=>resolve("unavailable"),probeTimeoutMs);})]);}catch{}finally{if(timer!==undefined)clearTimer(timer);if(authEpoch===epoch)authEpoch=null;}
   if(disposed||generation!==epoch||socket)return;
   if(result==="auth-required"){blocked=true;invoke(onState,"auth-required");return;}
-  if(result==="valid"){blocked=false;attempts=0;}
+  if(result==="valid")blocked=false;
   schedule();
  }
  function retire(target,reason="disconnected",skipProbe=false){

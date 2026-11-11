@@ -15,6 +15,7 @@ import { createInteractionController } from "./interactive-requests.js";
 import { createWorkspacePanel } from "./workspace-panel.js";
 import { createNativeWorkspace } from "./native-workspace.js";
 import { createSocketSession } from "./socket-session.js";
+import { createNativeRecovery } from "./native-recovery.js";
 import { connectionRuntimeMessages, fetchConnectionInfo, isReadRpc, rpcDeadlineMs } from "./connection-runtime.js";
 import { asyncQuestions, parseQuestionReply, groupTimeline } from "./readable-timeline.js";
 import { createAsyncQuestionCards } from "./async-question-cards.js";
@@ -252,6 +253,7 @@ let chatAttachmentController, attachmentDraftId, attachmentSendTicket;
 let nativeWorkspace;
 let connectionSession;
 let connectionSettingsTask;
+let nativeRecovery = null;
 const attachmentDownloadViews = new Set();
 
 function pendingAttachmentCount() {
@@ -851,6 +853,7 @@ async function boot() {
     connectionSession?.visibilityChanged();
     if (document.hidden) stopCurrentThreadSync();
     else {
+      nativeRecovery?.request({immediate:true});
       scheduleCurrentThreadSync(0);
       refreshThreadManifestIfDue();
       pumpBackgroundThreadCache();
@@ -858,13 +861,14 @@ async function boot() {
   });
   window.addEventListener("focus", () => {
     connectionSession?.checkLiveness();
+    nativeRecovery?.request({immediate:true});
     scheduleCurrentThreadSync(0);
     refreshThreadManifestIfDue();
   });
   window.addEventListener("online",()=>connectionSession?.onlineChanged());
   window.addEventListener("offline",()=>connectionSession?.onlineChanged());
   window.addEventListener("pageshow",()=>connectionSession?.visibilityChanged());
-  window.addEventListener("pagehide",event=>{if(!event.persisted)connectionSession?.dispose();});
+  window.addEventListener("pagehide",event=>{if(!event.persisted){connectionSession?.dispose();nativeRecovery?.dispose();}});
 
   if (!authenticationAccepted(info)) {
     const access=state.authMode==="cloudflare-access";
@@ -903,6 +907,14 @@ function rememberAccessToken(token) {
 }
 
 function connect() {
+  if(!nativeRecovery)nativeRecovery=createNativeRecovery({
+    getContext:()=>({key:`${state.currentThread?.id||"draft"}:${state.threadLoadSeq}:${connectionSession?.getState().generation}`,browserConnected:state.connected,nativeConnected:state.desktopBridgeConnected,needsSettings:Boolean(state.currentThread?.id&&!state.currentThread.draft&&state.needsConnectionSettingsRefresh),visible:!document.hidden,canRecover:!state.loadingThreadId&&!state.initialSettingsLoading}),
+    probe:reconnectDesktopBridge,
+    restore:async()=>{const revision=state.threadLoadSeq;await state.initialSettingsBarrier;if(revision!==state.threadLoadSeq)return false;return refreshConnectionSettings();},
+    onRecovered:()=>{updateSendMode();applyBridgeModeUi();scheduleCurrentThreadSync(0);refreshThreadManifestIfDue();pumpBackgroundThreadCache();},
+    onState:()=>updateResumeStatus(state.currentThread),
+    onError:error=>console.warn("[codex-webui:native-recovery]",{event:"passive-read-retry",code:/^[A-Z_]{1,64}$/.test(error?.code||"")?error.code:"NATIVE_READ_FAILED"})
+  });
   if(!connectionSession){
     connectionSession=createSocketSession({
       url:()=>webSocketUrl(window.location,state.token),
@@ -915,9 +927,9 @@ function connect() {
       onMessage:(message,raw)=>handleMessage(message,raw?byteLengthText(raw):0),
       onDisconnect:()=>{
         state.connected=false;interactionController.setConnected(false);asyncQuestionCards.refresh();
-        if(state.currentThread?.id&&!state.currentThread.draft){state.needsConnectionSettingsRefresh=true;state.currentThreadSettings=null;state.threadSettingsCache.clear();}
+        if(state.currentThread?.id&&!state.currentThread.draft){state.needsConnectionSettingsRefresh=true;state.threadSettingsCache.clear();}
         workspacePanel?.setConnected(false);stopCurrentThreadSync();
-        rejectPendingRequests(new Error(t("connection.disconnected")));applyBridgeModeUi();
+        rejectPendingRequests(new Error(t("connection.disconnected")));applyBridgeModeUi();updateSendMode();nativeRecovery?.request();
       },
       onState:value=>{
         if(value==="connected")return;
@@ -972,6 +984,7 @@ async function initialLoad() {
     state.initialSettingsLoading=false;releaseSettings();applyBridgeModeUi();
     state.initialThreadRestorePending = false;
     els.sendButton.disabled = isSendBlocked();
+    nativeRecovery?.request({immediate:true});
   }
 }
 
@@ -981,12 +994,12 @@ function refreshConnectionSettings(){
   const generation=connectionSession?.getState().generation,token=state.token,revision=state.threadLoadSeq,bridgeEpoch=state.nativeBridgeEpoch||0;
   if(connectionSettingsTask?.threadId===threadId&&connectionSettingsTask.generation===generation&&connectionSettingsTask.revision===revision&&connectionSettingsTask.bridgeEpoch===bridgeEpoch)return connectionSettingsTask.promise;
   const task={threadId,generation,revision,bridgeEpoch,promise:null};connectionSettingsTask=task;
-  task.promise=rpc("thread/resume",{threadId,initialTurnsPage:{limit:1}}).then(result=>{
+  task.promise=rpc("thread/resume",{threadId,excludeTurns:true}).then(result=>{
     if(connectionSettingsTask!==task||state.currentThread?.id!==threadId||state.token!==token||connectionSession?.getState().generation!==generation||state.threadLoadSeq!==revision||(state.nativeBridgeEpoch||0)!==bridgeEpoch||!state.connected)return false;
     if(result.thread?.id!==threadId)throw new Error(t("error.resume"));
     state.currentThread={...state.currentThread,...result.thread};
     const settings=threadSettingsFromResume(result);applyThreadSettings(settings);cacheThreadSettings(threadId,settings);
-    state.needsConnectionSettingsRefresh=false;updateThreadHeader();applyBridgeModeUi();return true;
+    state.needsConnectionSettingsRefresh=false;updateThreadHeader();applyBridgeModeUi();updateSendMode();return true;
   }).finally(()=>{if(connectionSettingsTask===task)connectionSettingsTask=null;});
   return task.promise;
 }
@@ -1003,6 +1016,8 @@ function bindUi() {
   els.refreshThreads?.addEventListener("click", refreshAll);
   els.resumeStatus?.addEventListener("click", async () => {
     try {
+      if(!state.connected){connectionSession?.retry();return;}
+      if(state.desktopBridgeConnected!==true||state.needsConnectionSettingsRefresh){nativeRecovery?.retry();return;}
       if (state.desktopBridgeConnected === false) {
         await reconnectDesktopBridge();
         return;
@@ -2086,7 +2101,7 @@ async function loadThreads() {
 }
 
 function refreshThreadManifestIfDue() {
-  if (!state.connected || state.threadListSyncInFlight) return;
+  if (!state.connected || state.desktopBridgeConnected!==true || state.needsConnectionSettingsRefresh || state.threadListSyncInFlight) return;
   if (Date.now() - state.lastThreadListSyncAt < MANIFEST_REFRESH_MS) return;
   loadThreads().catch(() => {});
 }
@@ -2102,7 +2117,7 @@ function prewarmThreadCaches() {
 }
 
 function scheduleBackgroundThreadCache(threadId, delay = 180) {
-  if(document.hidden||!state.connected)return;
+  if(document.hidden||!state.connected||state.desktopBridgeConnected!==true||state.needsConnectionSettingsRefresh)return;
   const id = String(threadId || "");
   if (!id || id === state.currentThread?.id) return;
   const existing = state.backgroundCacheTimers.get(id);
@@ -2115,7 +2130,7 @@ function scheduleBackgroundThreadCache(threadId, delay = 180) {
 }
 
 function enqueueBackgroundThreadCache(threadId) {
-  if(document.hidden||!state.connected)return;
+  if(document.hidden||!state.connected||state.desktopBridgeConnected!==true||state.needsConnectionSettingsRefresh)return;
   const id = String(threadId || "");
   if (!id || id === state.currentThread?.id) return;
   if (state.backgroundCacheQueued.has(id) || state.backgroundCacheInFlight.has(id)) return;
@@ -2139,7 +2154,7 @@ function enqueueBackgroundThreadCache(threadId) {
 }
 
 function pumpBackgroundThreadCache() {
-  if(document.hidden||state.loadingThreadId||!state.connected)return;
+  if(document.hidden||state.loadingThreadId||!state.connected||state.desktopBridgeConnected!==true||state.needsConnectionSettingsRefresh)return;
   while (
     state.backgroundCacheInFlight.size < BACKGROUND_CACHE_CONCURRENCY
     && state.backgroundCacheQueue.length
@@ -2164,7 +2179,7 @@ async function refreshBackgroundThreadCache(threadId) {
     threadId,
     limit: 1,
     sortDirection: "desc",
-    itemsView: TURN_ITEMS_VIEW
+    itemsView: "summary"
   });
   if (threadId === state.currentThread?.id) return;
   const turns = page?.data || [];
@@ -2559,6 +2574,7 @@ function createThread({ cwd: requestedCwd = "" } = {}) {
   state.initialThreadRestorePending = false;
   state.messages = [];
   state.currentThreadSettings = null;
+  state.needsConnectionSettingsRefresh = false;
   state.lastMessageAt = null;
   state.lastLoadStats = null;
   state.threadLoadStats = null;
@@ -2651,6 +2667,7 @@ async function openThread(threadOrId, { showFailure = true } = {}) {
   state.currentThreadSettings = null;
   const restoredCachedSettings = !needsResume(previewThread)
     && restoreThreadSettingsCache(cachedSettings);
+  state.needsConnectionSettingsRefresh = !restoredCachedSettings;
   state.lastMessageAt = threadTimestamp(state.currentThread) || null;
   setProjectSelection(state.currentThread.cwd || "");
   updateProjectSelectState();
@@ -2757,7 +2774,7 @@ async function openThread(threadOrId, { showFailure = true } = {}) {
       await loadPermissionModes(state.currentThread?.cwd || "");
       const resumeResult = await rpc(
         "thread/resume",
-        { threadId, initialTurnsPage:{limit:1} },
+        { threadId, excludeTurns:true },
         { traffic: state.threadLoadStats, label: t("load.readSettings") }
       );
       if (loadSeq !== state.threadLoadSeq) return;
@@ -2803,6 +2820,7 @@ async function openThread(threadOrId, { showFailure = true } = {}) {
       els.sendButton.disabled = isSendBlocked();
       updateTrafficSummary();
       renderThreads();
+      nativeRecovery?.request({immediate:true});
       if (restoredCachedPage && !fetchedLatestPage) scheduleCurrentThreadSync();
       else scheduleCurrentThreadSync();
       pumpBackgroundThreadCache();
@@ -2834,7 +2852,7 @@ function scheduleCurrentThreadSync(delay = null) {
 
 async function runCurrentThreadSync() {
   state.threadSyncTimer = null;
-  if (state.threadSyncInFlight || state.loadingThreadId || !state.connected || document.hidden) {
+  if (state.threadSyncInFlight || state.loadingThreadId || !state.connected || state.desktopBridgeConnected!==true || state.needsConnectionSettingsRefresh || document.hidden) {
     scheduleCurrentThreadSync();
     return;
   }
@@ -2968,7 +2986,7 @@ async function resumeCurrentThread(options = {}) {
   els.threadMeta.textContent = `${shortPath(thread.cwd)} · ${t("status.resuming")}`;
 
   try {
-    const result = await rpc("thread/resume", { threadId, initialTurnsPage:{limit:1} });
+    const result = await rpc("thread/resume", { threadId, excludeTurns:true });
     if (state.currentThread?.id === threadId) {
       state.currentThread = result.thread || state.currentThread;
       applyThreadSettings(threadSettingsFromResume(result));
@@ -2985,6 +3003,7 @@ async function resumeCurrentThread(options = {}) {
       state.resumingThreadId = null;
     }
     updateResumeStatus(state.currentThread);
+    updateSendMode();
   }
 }
 
@@ -5088,7 +5107,7 @@ async function startNextQueuedSubmission(threadId) {
 }
 
 function isSendBlocked() {
-  return state.initialThreadRestorePending || Boolean(state.currentThread?.id&&state.needsConnectionSettingsRefresh) || Boolean(state.sendingThreadId) || Boolean(state.interruptingTurnId);
+  return !state.connected || state.desktopBridgeConnected!==true || state.initialThreadRestorePending || Boolean(state.currentThread?.id&&state.needsConnectionSettingsRefresh) || Boolean(state.sendingThreadId) || Boolean(state.interruptingTurnId);
 }
 
 async function commitThreadTitle() {
@@ -5238,6 +5257,7 @@ function updateProjectSelectState() {
 
 function applyBridgeModeUi() {
   const disabled = !state.connected || state.desktopBridgeConnected !== true
+    || state.needsConnectionSettingsRefresh
     || state.initialSettingsLoading || Boolean(state.loadingThreadId)
     || state.settingsSaving
     || !state.threadSettingsAvailable
@@ -5268,10 +5288,11 @@ function setDesktopBridgeStatus(connected) {
   workspacePanel?.setConnected(Boolean(connected) && state.connected);
   if (wasConnected && !state.desktopBridgeConnected) {
     state.threadSettingsCache.clear();
-    if(state.currentThread?.id&&!state.currentThread.draft){state.needsConnectionSettingsRefresh=true;state.currentThreadSettings=null;scheduleCurrentThreadSync(1000);}
+    if(state.currentThread?.id&&!state.currentThread.draft)state.needsConnectionSettingsRefresh=true;
   }
-  if(connected&&state.connected&&state.needsConnectionSettingsRefresh)void refreshConnectionSettings().catch(error=>workflowNotice(error.message||t("error.resume")));
+  nativeRecovery?.request({immediate:Boolean(connected)});
   applyBridgeModeUi();
+  updateSendMode();
   if (!state.connected) return;
   setConnection(connected ? "connection.connected" : "connection.desktopBridgeOffline");
 }
@@ -5308,15 +5329,17 @@ function updateResumeStatus(thread) {
   const status = formatStatus(thread?.status);
   const hasThread = Boolean(thread?.id);
   const resuming = hasThread && state.resumingThreadId === thread.id;
-  const resumed = hasThread && status !== "notLoaded" && status !== "draft";
+  const needsSettings = hasThread && state.needsConnectionSettingsRefresh;
+  const recoveringSettings = needsSettings && Boolean(nativeRecovery?.getState().running);
+  const resumed = hasThread && !needsSettings && status !== "notLoaded" && status !== "draft";
   els.resumeStatus.classList.toggle("hidden", !hasThread || status === "draft");
   els.resumeStatus.classList.toggle("resumed", resumed);
   els.resumeStatus.classList.toggle("unresumed", !resumed);
   els.chatPane?.classList.toggle("resuming-thread", resuming);
   els.chatPane?.classList.toggle("connected-thread", resumed && !resuming);
-  const label = resuming ? "thread.bridgeLoading" : resumed ? "ui.header.connectedApp" : "thread.bridgeLoad";
+  const label = needsSettings ? (recoveringSettings ? "connectionRuntime.settingsLoading" : "connectionRuntime.settingsRetry") : resuming ? "thread.bridgeLoading" : resumed ? "ui.header.connectedApp" : "thread.bridgeLoad";
   els.resumeStatus.textContent = t(label);
-  els.resumeStatus.disabled = !hasThread || resumed || resuming;
+  els.resumeStatus.disabled = !hasThread || resumed || resuming || recoveringSettings;
   els.resumeStatus.title = t(resumed ? "thread.bridgeConnectedTitle" : "thread.bridgeLoadTitle");
 }
 
@@ -5334,7 +5357,7 @@ function setConnection(key) {
   if (!els.connectionBanner) return;
 
   const value = String(text || "");
-  const shouldShow = value && key !== "connection.connected";
+  const shouldShow = value && !["connection.connected","connection.connecting","connection.reconnecting","connection.desktopBridgeOffline"].includes(key);
   els.connectionBanner.textContent = value;
   if(shouldShow&&connectionSession&&!state.connected){
     const retry=document.createElement("button");retry.type="button";retry.className="secondary-action compact-action";retry.textContent=t("connectionRuntime.retry");retry.addEventListener("click",()=>connectionSession.retry());els.connectionBanner.append(" ",retry);

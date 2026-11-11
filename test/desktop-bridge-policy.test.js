@@ -18,7 +18,7 @@ test("desktop bridge strips runtime setting overrides from existing-thread turns
   });
 });
 
-test("desktop bridge resume carries only the target thread ID", () => {
+test("desktop bridge resumes settings without rehydrating legacy turn history", () => {
   assert.deepEqual(
     sanitizeDesktopBridgeParams("thread/resume", {
       threadId: "thread-2",
@@ -28,13 +28,12 @@ test("desktop bridge resume carries only the target thread ID", () => {
       approvalPolicy: "never",
       sandbox: "read-only"
     }),
-    { threadId: "thread-2" }
+    { threadId: "thread-2", excludeTurns: true }
   );
 });
 
-test("resume allows bounded passive pagination while still stripping harness overrides",()=>{
- assert.deepEqual(sanitizeDesktopBridgeParams("thread/resume",{threadId:"synthetic",initialTurnsPage:{limit:1},model:"other",approvalPolicy:"never",sandboxPolicy:{type:"dangerFullAccess"}}),{threadId:"synthetic",initialTurnsPage:{limit:1}});
- for(const page of [{limit:0},{limit:7},{limit:"1"},{limit:1,model:"other"},{limit:1,cwd:"/other"}])assert.deepEqual(sanitizeDesktopBridgeParams("thread/resume",{threadId:"synthetic",initialTurnsPage:page}),{threadId:"synthetic"});
+test("settings resume excludes history and pagination while still stripping harness overrides",()=>{
+ for(const page of [{limit:1},{limit:6},{limit:0},{limit:7},{limit:"1"},{limit:1,model:"other"},{limit:1,cwd:"/other"}])assert.deepEqual(sanitizeDesktopBridgeParams("thread/resume",{threadId:"synthetic",excludeTurns:false,initialTurnsPage:page,model:"other",approvalPolicy:"never",sandboxPolicy:{type:"dangerFullAccess"}}),{threadId:"synthetic",excludeTurns:true});
 });
 
 test("new shared threads keep model effort and permission presets but drop raw sandbox", () => {

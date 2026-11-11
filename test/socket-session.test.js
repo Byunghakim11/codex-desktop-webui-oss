@@ -10,6 +10,12 @@ function fixture(){
 test("transient close before open retains authentication and schedules one retry",async()=>{
  const f=fixture();f.session.connect();f.sockets[0].close();await flush();assert.equal(f.session.getState().authRequired,false);assert.equal(f.session.getState().retryScheduled,true);await f.clock.advance(4);assert.equal(f.sockets.length,2);assert.equal(f.states.includes("auth-required"),false);f.session.dispose();
 });
+
+test("valid authentication does not reset backoff for repeated short-lived connections",async()=>{
+ const f=fixture();f.session.connect();f.sockets[0].open();f.sockets[0].close();await flush();
+ await f.clock.advance(3);assert.equal(f.sockets.length,1);await f.clock.advance(1);assert.equal(f.sockets.length,2);
+ f.sockets[1].open();f.sockets[1].close();await flush();await f.clock.advance(7);assert.equal(f.sockets.length,2);await f.clock.advance(1);assert.equal(f.sockets.length,3);f.session.dispose();
+});
 test("silent connecting transport has a finite deadline and ignores late open/message",async()=>{
  const f=fixture();f.session.connect();const old=f.sockets[0];await f.clock.advance(11);assert.equal(old.closed,true);await f.clock.advance(5);assert.equal(f.sockets.length,2);old.open();old.message({type:"late"});assert.deepEqual(f.messages,[]);assert.equal(f.session.getState().connected,false);f.session.dispose();
 });

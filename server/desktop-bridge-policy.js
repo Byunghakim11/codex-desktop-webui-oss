@@ -14,10 +14,9 @@ const rawSandboxKeys = new Set(["sandbox", "sandboxPolicy", "sandbox_policy"]);
 export function sanitizeDesktopBridgeParams(method, params = {}) {
   const next = { ...(params || {}) };
   if (method === "thread/resume") {
-    const result=next.threadId?{threadId:next.threadId}:{};
-    const page=next.initialTurnsPage;
-    if(result.threadId&&page&&typeof page==="object"&&!Array.isArray(page)&&Object.keys(page).every(key=>key==="limit")&&Number.isInteger(page.limit)&&page.limit>=1&&page.limit<=6)result.initialTurnsPage={limit:page.limit};
-    return result;
+    // The browser reads history through thread/turns/list. A resume without this
+    // native flag also returns the entire legacy history, even with a page limit.
+    return next.threadId ? { threadId: next.threadId, excludeTurns: true } : {};
   }
   if (method === "turn/start") {
     for (const key of runtimeOverrideKeys) delete next[key];
